@@ -1,4 +1,8 @@
-# Jellyfin Contributors
+# Contributors
+
+Siren is a fork of [Jellyfin](https://github.com/jellyfin/jellyfin). The people below contributed to Jellyfin, on which this project is built.
+
+## Jellyfin Contributors
 
  - [0x25CBFC4F](https://github.com/0x25CBFC4F)
  - [1337joe](https://github.com/1337joe)
