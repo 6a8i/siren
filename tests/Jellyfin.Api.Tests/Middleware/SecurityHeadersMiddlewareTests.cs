@@ -10,7 +10,7 @@ namespace Jellyfin.Api.Middleware.Tests
     public class SecurityHeadersMiddlewareTests
     {
         private const string FullPolicy =
-            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; "
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://www.gstatic.com http://www.gstatic.com; style-src 'self' 'unsafe-inline'; "
             + "img-src 'self' data: blob: https:; media-src 'self' blob: data:; font-src 'self' data:; "
             + "connect-src 'self' ws: wss: https:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' https:; "
             + "frame-ancestors 'self'; base-uri 'self'; form-action 'self'; report-uri /System/CspReport";

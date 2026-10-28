@@ -39,7 +39,7 @@ completa é enviada; vale na requisição seguinte, sem reiniciar:
 A política é uma só, montada uma vez por processo (o `report-uri` recebe o `BaseUrl` na frente):
 
 ```
-default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' ws: wss: https:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; report-uri /System/CspReport
+default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://www.gstatic.com http://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' ws: wss: https:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; report-uri /System/CspReport
 ```
 
 Cada permissão existe por algo que o web client ou seus plugins fazem hoje (o comentário em

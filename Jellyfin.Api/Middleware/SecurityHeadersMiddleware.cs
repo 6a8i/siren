@@ -29,6 +29,8 @@ public class SecurityHeadersMiddleware
     /// configuration pages are HTML fragments with their own inline scripts.</item>
     /// <item><c>script-src 'unsafe-eval'</c>: some bundled libraries (the ES5 shims, template helpers)
     /// still build functions from strings; a page using them breaks without it.</item>
+    /// <item><c>script-src https://www.gstatic.com http://www.gstatic.com</c>: the Chromecast sender SDK;
+    /// the Cast extension in Chrome also pulls its own copy over plain http.</item>
     /// <item><c>script-src blob:</c>, <c>worker-src blob:</c>, <c>child-src blob:</c>: the subtitle
     /// renderer (libass), the PDF reader and the audio analysers run as workers created from blob URLs.</item>
     /// <item><c>style-src 'unsafe-inline'</c>: layout and theme switching set inline styles, and skins
@@ -49,7 +51,7 @@ public class SecurityHeadersMiddleware
     /// </summary>
     private const string PolicyWithoutReportUri =
         "default-src 'self'; "
-        + "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; "
+        + "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://www.gstatic.com http://www.gstatic.com; "
         + "style-src 'self' 'unsafe-inline'; "
         + "img-src 'self' data: blob: https:; "
         + "media-src 'self' blob: data:; "
