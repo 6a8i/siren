@@ -175,6 +175,8 @@ namespace Jellyfin.Server
             var configurationCompleted = false;
             try
             {
+                var hostBuildStart = Stopwatch.GetTimestamp();
+
                 // The default builder watches the working directory recursively for config changes; nothing here reloads from it.
                 _jellyfinHost = Host.CreateDefaultBuilder(["hostBuilder:reloadConfigOnChange=false"])
                     .UseConsoleLifetime()
@@ -192,6 +194,8 @@ namespace Jellyfin.Server
                     .UseSerilog()
                     .ConfigureServices(e => e.RegisterStartupLogger())
                     .Build();
+
+                var hostBuildElapsed = Stopwatch.GetElapsedTime(hostBuildStart);
 
                 /*
                  * Initialize the transcode path marker so we avoid starting Jellyfin in a broken state.
@@ -214,18 +218,26 @@ namespace Jellyfin.Server
 
                 var jellyfinMigrationService = ActivatorUtilities.CreateInstance<JellyfinMigrationService>(appHost.ServiceProvider);
                 SetupServer.ReportActivity(StartupActivity.PreparingMigrations);
+                var migrationsStart = Stopwatch.GetTimestamp();
                 await jellyfinMigrationService.PrepareSystemForMigration(_logger).ConfigureAwait(false);
                 // "Preparing migrations" carries through the DB read; per-migration progress is reported
                 // as "Running migration X of Y" from inside the step once the pending set is known.
                 _optimizeDatabaseAfterMigration |= await jellyfinMigrationService.MigrateStepAsync(JellyfinMigrationStageTypes.CoreInitialisation, appHost.ServiceProvider).ConfigureAwait(false);
+                var migrationsElapsed = Stopwatch.GetElapsedTime(migrationsStart);
 
                 SetupServer.ReportActivity(StartupActivity.InitializingServices);
+                var servicesStart = Stopwatch.GetTimestamp();
                 await appHost.InitializeServices(startupConfig).ConfigureAwait(false);
+                var servicesElapsed = Stopwatch.GetElapsedTime(servicesStart);
                 _appHost = appHost;
 
+                migrationsStart = Stopwatch.GetTimestamp();
                 _optimizeDatabaseAfterMigration |= await jellyfinMigrationService.MigrateStepAsync(JellyfinMigrationStageTypes.AppInitialisation, appHost.ServiceProvider).ConfigureAwait(false);
                 await jellyfinMigrationService.CleanupSystemAfterMigration(_logger).ConfigureAwait(false);
                 await OptimizeDatabaseAfterMigrationAsync(appHost.ServiceProvider).ConfigureAwait(false);
+                migrationsElapsed += Stopwatch.GetElapsedTime(migrationsStart);
+
+                var webHostElapsed = TimeSpan.Zero;
                 try
                 {
                     configurationCompleted = true;
@@ -233,7 +245,9 @@ namespace Jellyfin.Server
 
                     if (options.StartupMode is null or Configuration.StartupMode.MediaServer)
                     {
+                        var webHostStart = Stopwatch.GetTimestamp();
                         await _jellyfinHost.StartAsync().ConfigureAwait(false);
+                        webHostElapsed = Stopwatch.GetElapsedTime(webHostStart);
 
                         if (!OperatingSystem.IsWindows() && startupConfig.UseUnixSocket())
                         {
@@ -251,8 +265,21 @@ namespace Jellyfin.Server
 
                 if (options.StartupMode is null or Configuration.StartupMode.MediaServer)
                 {
+                    var startupTasksStart = Stopwatch.GetTimestamp();
                     await appHost.RunStartupTasksAsync().ConfigureAwait(false);
+                    var startupTasksElapsed = Stopwatch.GetElapsedTime(startupTasksStart);
+
                     _logger.LogInformation("Startup complete {Time:g}", Stopwatch.GetElapsedTime(_startTimestamp));
+
+                    // The total above also covers what runs before the host exists (logging, the storage check,
+                    // the pre-initialisation migrations); the phases are the parts of it that can be worked on.
+                    _logger.LogInformation(
+                        "Startup phases: host build {HostBuild:g}, migrations {Migrations:g}, services {Services:g}, web host {WebHost:g}, startup tasks {StartupTasks:g}",
+                        hostBuildElapsed,
+                        migrationsElapsed,
+                        servicesElapsed,
+                        webHostElapsed,
+                        startupTasksElapsed);
 
                     try
                     {

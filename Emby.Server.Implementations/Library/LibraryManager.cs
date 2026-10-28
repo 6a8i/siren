@@ -1490,6 +1490,7 @@ namespace Emby.Server.Implementations.Library
         private async Task PerformLibraryValidation(IProgress<double> progress, CancellationToken cancellationToken)
         {
             _logger.LogInformation("Validating media library");
+            var scanStart = Stopwatch.GetTimestamp();
 
             await ValidateTopLibraryFolders(cancellationToken).ConfigureAwait(false);
 
@@ -1498,13 +1499,83 @@ namespace Emby.Server.Implementations.Library
             // Validate the entire media library
             await RootFolder.ValidateChildren(innerProgress, new MetadataRefreshOptions(new DirectoryService(_fileSystem)), recursive: true, cancellationToken: cancellationToken).ConfigureAwait(false);
 
+            var (libraryCount, itemCount) = LogLibraryScanTimings();
+
             progress.Report(96);
 
             innerProgress = new Progress<double>(pct => progress.Report(96 + (pct * .04)));
 
             await RunPostScanTasks(innerProgress, cancellationToken).ConfigureAwait(false);
 
+            _logger.LogInformation(
+                "Library scan complete in {Elapsed:g}: {LibraryCount} libraries, {ItemCount} media items, post-scan tasks included",
+                Stopwatch.GetElapsedTime(scanStart),
+                libraryCount,
+                itemCount);
+
             progress.Report(100);
+        }
+
+        /// <summary>
+        /// Logs one line per library with the time its folders spent in the scan (both the file system pass and
+        /// the metadata pass, added up over its paths) and the number of media items it holds afterwards.
+        /// </summary>
+        /// <returns>How many libraries were logged and how many media items they hold.</returns>
+        private (int Libraries, int Items) LogLibraryScanTimings()
+        {
+            var timings = RootFolder.TakeLibraryScanTimings();
+            if (timings.Count == 0 || !_logger.IsEnabled(LogLevel.Information))
+            {
+                return (0, 0);
+            }
+
+            var libraries = 0;
+            var items = 0;
+            var reported = new HashSet<Guid>();
+            foreach (var library in GetUserRootFolder().Children.OfType<CollectionFolder>())
+            {
+                var elapsed = TimeSpan.Zero;
+                var folderIds = new List<Guid>();
+                foreach (var folder in library.GetPhysicalFolders())
+                {
+                    if (timings.TryGetValue(folder.Id, out var folderElapsed))
+                    {
+                        elapsed += folderElapsed;
+                        folderIds.Add(folder.Id);
+                        reported.Add(folder.Id);
+                    }
+                }
+
+                // A library whose paths were all inaccessible was not scanned at all.
+                if (folderIds.Count == 0)
+                {
+                    continue;
+                }
+
+                var count = GetCount(new InternalItemsQuery
+                {
+                    TopParentIds = folderIds.ToArray(),
+                    IsFolder = false,
+                    IsVirtualItem = false
+                });
+
+                _logger.LogInformation("Library {Library} scanned in {Elapsed:g}: {ItemCount} media items", library.Name, elapsed, count);
+                libraries++;
+                items += count;
+            }
+
+            // Top-level folders that belong to no library: the virtual children plugins and channels add to the root.
+            foreach (var child in RootFolder.Children)
+            {
+                if (reported.Contains(child.Id) || !timings.TryGetValue(child.Id, out var elapsed))
+                {
+                    continue;
+                }
+
+                _logger.LogInformation("Folder {Folder} scanned in {Elapsed:g}", child.Name, elapsed);
+            }
+
+            return (libraries, items);
         }
 
         /// <summary>

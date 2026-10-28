@@ -253,3 +253,49 @@ Não são de performance, mas apareceram na leitura e valem um PR curto.
 3. Com `dotnet-counters` e `dotnet-trace`, registrar GC gen2, alocações por segundo e latência das rotas `/Items`, `/Users/{id}/Items/{id}` e segmentos HLS sob carga (`bombardier` ou `k6`).
 4. Ligar o log de consultas do EF (`Microsoft.EntityFrameworkCore.Database.Command` em Debug) e contar consultas por requisição nas rotas acima.
 5. Repetir após cada onda e registrar os números aqui.
+
+### Linhas de tempo que o servidor já escreve
+
+O servidor mede a inicialização e o scan sozinho, em nível Information, com `Stopwatch`; não é
+preciso instrumentar nada para os passos 1 e 2.
+
+**Inicialização.** Depois de `Startup complete 0:00:12.3456789` (tempo total desde o início do
+processo, incluindo log, checagem de disco e migrações de pré-inicialização) vem:
+
+```
+Startup phases: host build 0:00:01.2, migrations 0:00:00.4, services 0:00:03.1, web host 0:00:00.6, startup tasks 0:00:02.0
+```
+
+- `host build`: construção do host genérico e do Kestrel (`Host.CreateDefaultBuilder(...).Build()`),
+  ou seja, registro de serviços e leitura da configuração.
+- `migrations`: preparação, estágios `CoreInitialisation` e `AppInitialisation`, limpeza e a
+  otimização do banco quando alguma migração rodou. Em um boot normal fica perto de zero; se
+  crescer, alguma migração está sendo reexecutada ou o banco está sendo otimizado a cada boot.
+- `services`: `InitializeServices` (carga das traduções, descoberta de plugins e partes).
+- `web host`: `StartAsync` do host, isto é, o bind das portas e o pipeline HTTP.
+- `startup tasks`: `RunStartupTasksAsync` (registro das tarefas agendadas e validação do ffmpeg,
+  que lança um processo por capacidade consultada).
+
+A diferença entre o total e a soma das fases é o que acontece antes do host existir.
+
+**Scan de biblioteca.** Ao fim da passagem pelas bibliotecas, uma linha por biblioteca:
+
+```
+Library Filmes scanned in 0:04:12.5: 1834 media items
+Library Séries scanned in 0:11:03.2: 9120 media items
+Library scan complete in 0:15:40.9: 2 libraries, 10954 media items, post-scan tasks included
+```
+
+- O tempo de cada biblioteca soma as duas passagens pelas pastas dela (a varredura do sistema de
+  arquivos e a atualização de metadados) em todos os caminhos da biblioteca. As bibliotecas são
+  processadas em paralelo, então a soma das linhas pode passar do total.
+- `media items` conta os itens que não são pastas nem virtuais (filmes, episódios, faixas),
+  consultado no banco depois do scan; serve para ver o custo por item entre uma execução e outra.
+- Uma biblioteca cujos caminhos estavam todos inacessíveis não aparece. Pastas de topo que não
+  pertencem a nenhuma biblioteca (filhos virtuais adicionados por plugins e canais) saem como
+  `Folder X scanned in ...`.
+- A linha final inclui as tarefas pós-scan, que continuam com as linhas próprias
+  (`Post-scan task X completed after ...`).
+
+Para o rescan sem mudanças do passo 2, compare as linhas por biblioteca entre a primeira execução
+e a segunda; o tempo por item deve cair para o custo de enumerar e comparar datas.

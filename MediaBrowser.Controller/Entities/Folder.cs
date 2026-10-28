@@ -830,6 +830,19 @@ namespace MediaBrowser.Controller.Entities
 
         private async Task RefreshMetadataRecursive(IList<BaseItem> children, MetadataRefreshOptions refreshOptions, bool recursive, IProgress<double> progress, CancellationToken cancellationToken)
         {
+            if (this is AggregateFolder root)
+            {
+                // The children of the root are the library folders: time this phase per library for the scan log.
+                await RunTasks(
+                    (baseItem, innerProgress) => root.TimeLibraryScan(
+                        baseItem,
+                        () => RefreshChildMetadata(baseItem, refreshOptions, recursive && baseItem.IsFolder, innerProgress, cancellationToken)),
+                    children,
+                    progress,
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             await RunTasks(
                 (baseItem, innerProgress) => RefreshChildMetadata(baseItem, refreshOptions, recursive && baseItem.IsFolder, innerProgress, cancellationToken),
                 children,
@@ -885,6 +898,19 @@ namespace MediaBrowser.Controller.Entities
         /// <returns>Task.</returns>
         private async Task ValidateSubFolders(IList<Folder> children, IDirectoryService directoryService, IProgress<double> progress, CancellationToken cancellationToken)
         {
+            if (this is AggregateFolder root)
+            {
+                // The children of the root are the library folders: time this phase per library for the scan log.
+                await RunTasks(
+                    (folder, innerProgress) => root.TimeLibraryScan(
+                        folder,
+                        () => folder.ValidateChildrenInternal(innerProgress, true, false, false, null, directoryService, cancellationToken)),
+                    children,
+                    progress,
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             await RunTasks(
                 (folder, innerProgress) => folder.ValidateChildrenInternal(innerProgress, true, false, false, null, directoryService, cancellationToken),
                 children,

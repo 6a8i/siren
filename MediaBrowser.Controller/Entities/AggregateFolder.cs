@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -29,6 +30,11 @@ namespace MediaBrowser.Controller.Entities
         /// The _virtual children.
         /// </summary>
         private readonly ConcurrentBag<BaseItem> _virtualChildren = new ConcurrentBag<BaseItem>();
+
+        /// <summary>
+        /// Stopwatch ticks each top-level folder spent in the scan that is running, keyed by its id.
+        /// </summary>
+        private readonly ConcurrentDictionary<Guid, long> _libraryScanTicks = new();
         private bool _requiresRefresh;
         private Guid[] _childrenIds = null;
 
@@ -181,6 +187,46 @@ namespace MediaBrowser.Controller.Entities
                 .ConfigureAwait(false);
 
             ClearCache();
+        }
+
+        /// <summary>
+        /// Runs one phase of the scan of a top-level folder (a library path) and adds the time it took to that
+        /// folder's total, so the library manager can log one line per library once the scan is over.
+        /// </summary>
+        /// <param name="child">The top-level folder being scanned.</param>
+        /// <param name="work">The phase to run.</param>
+        /// <returns>A task that completes when the phase does.</returns>
+        internal async Task TimeLibraryScan(BaseItem child, Func<Task> work)
+        {
+            var start = Stopwatch.GetTimestamp();
+            try
+            {
+                await work().ConfigureAwait(false);
+            }
+            finally
+            {
+                _libraryScanTicks.AddOrUpdate(
+                    child.Id,
+                    static (_, elapsed) => elapsed,
+                    static (_, total, elapsed) => total + elapsed,
+                    Stopwatch.GetTimestamp() - start);
+            }
+        }
+
+        /// <summary>
+        /// Returns the time each top-level folder spent in the scan that just ran and clears the counters.
+        /// </summary>
+        /// <returns>The elapsed time per top-level folder id.</returns>
+        public Dictionary<Guid, TimeSpan> TakeLibraryScanTimings()
+        {
+            var timings = new Dictionary<Guid, TimeSpan>(_libraryScanTicks.Count);
+            foreach (var (id, ticks) in _libraryScanTicks)
+            {
+                timings[id] = Stopwatch.GetElapsedTime(0, ticks);
+            }
+
+            _libraryScanTicks.Clear();
+            return timings;
         }
 
         /// <summary>
