@@ -111,7 +111,7 @@ namespace Jellyfin.Server
                 => _logger.LogCritical((Exception)e.ExceptionObject, "Unhandled Exception");
 
             _logger.LogInformation(
-                "Jellyfin version: {Version}",
+                "Siren version: {Version}",
                 Assembly.GetEntryAssembly()!.GetName().Version!.ToString(3));
 
             StartupHelpers.LogEnvironmentInfo(_logger, appPaths);
@@ -186,7 +186,7 @@ namespace Jellyfin.Server
                         webHostBuilder.ConfigureWebHostBuilder(appHost, startupConfig, appPaths, _logger);
                         if (bool.TryParse(Environment.GetEnvironmentVariable("JELLYFIN_ENABLE_IIS"), out var iisEnabled) && iisEnabled)
                         {
-                            _logger.LogCritical("UNSUPPORTED HOSTING ENVIRONMENT Microsoft Internet Information Services. The option to run Jellyfin on IIS is an unsupported and untested feature. Only use at your own discretion.");
+                            _logger.LogCritical("UNSUPPORTED HOSTING ENVIRONMENT Microsoft Internet Information Services. The option to run Siren on IIS is an unsupported and untested feature. Only use at your own discretion.");
                             webHostBuilder.UseIIS();
                         }
                     })

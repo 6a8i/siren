@@ -261,6 +261,11 @@ namespace Emby.Server.Implementations
         /// <summary>
         /// Gets the current application name.
         /// </summary>
+        /// <remarks>
+        /// Read from the AssemblyProduct attribute and reported as ProductName by /System/Info and
+        /// /System/Info/Public. It stays "Jellyfin Server" on purpose: the official clients use it to
+        /// recognize a compatible server, so the Siren branding does not reach it.
+        /// </remarks>
         /// <value>The application name.</value>
         public string ApplicationProductName { get; } = FileVersionInfo.GetVersionInfo(Assembly.GetEntryAssembly().Location).ProductName;
 

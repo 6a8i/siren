@@ -787,7 +787,7 @@ namespace Jellyfin.Server.Implementations.Users
                 var defaultName = Environment.UserName;
                 if (string.IsNullOrWhiteSpace(defaultName) || !ValidUsernameRegex().IsMatch(defaultName))
                 {
-                    defaultName = "MyJellyfinUser";
+                    defaultName = "MySirenUser";
                 }
 
                 _logger.LogWarning("No users, creating one with username {UserName}", defaultName);

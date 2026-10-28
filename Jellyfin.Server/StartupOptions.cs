@@ -28,7 +28,7 @@ namespace Jellyfin.Server
         /// Gets or sets the path to the web directory.
         /// </summary>
         /// <value>The path to the web directory.</value>
-        [Option('w', "webdir", Required = false, HelpText = "Path to the Jellyfin web UI resources.")]
+        [Option('w', "webdir", Required = false, HelpText = "Path to the Siren web UI resources.")]
         public string? WebDir { get; set; }
 
         /// <summary>
@@ -61,11 +61,11 @@ namespace Jellyfin.Server
         public bool IsService { get; set; }
 
         /// <inheritdoc />
-        [Option("package-name", Required = false, HelpText = "Used when packaging Jellyfin (example, synology).")]
+        [Option("package-name", Required = false, HelpText = "Used when packaging Siren (example, synology).")]
         public string? PackageName { get; set; }
 
         /// <inheritdoc />
-        [Option("published-server-url", Required = false, HelpText = "Jellyfin Server URL to publish via auto discover process")]
+        [Option("published-server-url", Required = false, HelpText = "Siren server URL to publish via auto discover process")]
         public string? PublishedServerUrl { get; set; }
 
         /// <summary>
@@ -77,14 +77,14 @@ namespace Jellyfin.Server
         /// <summary>
         /// Gets or sets the path to an jellyfin backup archive to restore the application to.
         /// </summary>
-        [Option("restore-archive", Required = false, HelpText = "Path to a Jellyfin backup archive to restore from")]
+        [Option("restore-archive", Required = false, HelpText = "Path to a Siren backup archive to restore from")]
         public string? RestoreArchive { get; set; }
 
         /// <summary>
         /// Gets or sets the mode of operation the server should perform when started.
         /// Defaults to: <see cref="StartupMode.MediaServer"/>.
         /// </summary>
-        [Option("mode", Required = false, HelpText = "Mode which selects what action the jellyfin server should perform when started.")]
+        [Option("mode", Required = false, HelpText = "Mode which selects what action the Siren server should perform when started.")]
         public StartupMode? StartupMode { get; set; }
 
         /// <summary>
