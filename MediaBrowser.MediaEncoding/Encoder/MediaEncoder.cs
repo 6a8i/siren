@@ -120,13 +120,6 @@ namespace MediaBrowser.MediaEncoding.Encoder
         private string _ffprobePath;
         private int _threads;
 
-        /// <summary>
-        /// Threads for a single-frame extraction. "-threads 0" (the transcoding default) lets ffmpeg decode
-        /// with one thread per core, and several extractions run at once, so the count is capped.
-        /// </summary>
-        private int GetImageExtractionThreads()
-            => _threads > 0 ? Math.Min(_threads, 4) : Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
-
         public MediaEncoder(
             ILogger<MediaEncoder> logger,
             IServerConfigurationManager configurationManager,
@@ -246,20 +239,26 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 // to be twenty-odd sequential process launches on the startup path.
                 var validator = new EncoderValidator(_logger, _ffmpegPath);
 
-                var decodersTask = Task.Run(() => validator.GetDecoders().ToList());
-                var encodersTask = Task.Run(() => validator.GetEncoders().ToList());
-                var filtersTask = Task.Run(() => validator.GetFilters().ToList());
-                var filterOptionsTask = Task.Run(validator.GetFiltersWithOption);
-                var bsfOptionsTask = Task.Run(validator.GetBitStreamFiltersWithOption);
-                var hwaccelsTask = Task.Run(() => validator.GetHwaccels().ToList());
-                Task.WaitAll(decodersTask, encodersTask, filtersTask, filterOptionsTask, bsfOptionsTask, hwaccelsTask);
+                List<string> decoders = null;
+                List<string> encoders = null;
+                List<string> filters = null;
+                List<string> hwaccels = null;
+                IDictionary<FilterOptionType, bool> filterOptions = null;
+                IDictionary<BitStreamFilterOptionType, bool> bsfOptions = null;
+                Parallel.Invoke(
+                    () => decoders = validator.GetDecoders().ToList(),
+                    () => encoders = validator.GetEncoders().ToList(),
+                    () => filters = validator.GetFilters().ToList(),
+                    () => filterOptions = validator.GetFiltersWithOption(),
+                    () => bsfOptions = validator.GetBitStreamFiltersWithOption(),
+                    () => hwaccels = validator.GetHwaccels().ToList());
 
-                SetAvailableDecoders(decodersTask.Result);
-                SetAvailableEncoders(encodersTask.Result);
-                SetAvailableFilters(filtersTask.Result);
-                SetAvailableFiltersWithOption(filterOptionsTask.Result);
-                SetAvailableBitStreamFiltersWithOption(bsfOptionsTask.Result);
-                SetAvailableHwaccels(hwaccelsTask.Result);
+                SetAvailableDecoders(decoders);
+                SetAvailableEncoders(encoders);
+                SetAvailableFilters(filters);
+                SetAvailableFiltersWithOption(filterOptions);
+                SetAvailableBitStreamFiltersWithOption(bsfOptions);
+                SetAvailableHwaccels(hwaccels);
                 SetMediaEncoderVersion(validator);
 
                 _threads = EncodingHelper.GetNumberOfThreads(null, options, null);
@@ -692,6 +691,13 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
             return await ExtractImageInternal(inputArgument, container, videoStream, imageStreamIndex, threedFormat, offset, false, targetFormat, isAudio, cancellationToken).ConfigureAwait(false);
         }
+
+        /// <summary>
+        /// Threads for a single-frame extraction. "-threads 0" (the transcoding default) lets ffmpeg decode
+        /// with one thread per core, and several extractions run at once, so the count is capped.
+        /// </summary>
+        private int GetImageExtractionThreads()
+            => _threads > 0 ? Math.Min(_threads, 4) : Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
 
         private string GetImageResolutionParameter()
         {
@@ -1295,6 +1301,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
             {
                 StopProcesses();
                 _thumbnailResourcePool.Dispose();
+                _probeResourcePool.Dispose();
             }
         }
 

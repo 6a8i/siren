@@ -43,12 +43,6 @@ namespace Emby.Server.Implementations.IO
         private readonly ConcurrentDictionary<string, string> _tempIgnoredPaths = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
-        /// Incremented by every <see cref="Stop"/> so watchers still being created on a background
-        /// task can tell that the sweep they should have been caught by has already run.
-        /// </summary>
-        private int _watcherGeneration;
-
-        /// <summary>
         /// Paths reported by the watchers, handed to one consumer. Bounded so a burst (a large copy,
         /// an overflow refresh) cannot grow without limit; the newest paths win, since a lost event
         /// on a path that is still changing is reported again by the next event on it.
@@ -58,6 +52,12 @@ namespace Emby.Server.Implementations.IO
             FullMode = BoundedChannelFullMode.DropOldest,
             SingleReader = true
         });
+
+        /// <summary>
+        /// Incremented by every <see cref="Stop"/> so watchers still being created on a background
+        /// task can tell that the sweep they should have been caught by has already run.
+        /// </summary>
+        private int _watcherGeneration;
 
         private bool _disposed;
 

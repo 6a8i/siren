@@ -82,13 +82,14 @@ namespace MediaBrowser.Providers.Manager
         /// </summary>
         private readonly ConcurrentDictionary<MetadataProviderCacheKey, IMetadataProvider[]> _metadataProviderCache = new();
 
+        private readonly Dictionary<Guid, List<MetadataRefreshOptions>> _queuedRefreshes = new();
+
         private IImageProvider[] _imageProviders = [];
         private IMetadataService[] _metadataServices = [];
         private IMetadataProvider[] _metadataProviders = [];
         private IMetadataSaver[] _savers = [];
         private IExternalId[] _externalIds = [];
         private IExternalUrlProvider[] _externalUrlProviders = [];
-        private readonly Dictionary<Guid, List<MetadataRefreshOptions>> _queuedRefreshes = new();
         private int _activeRefreshProcessors;
         private bool _disposed;
 

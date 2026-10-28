@@ -615,6 +615,7 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
         }
 
         _parallelEncodingLimit?.Dispose();
+        _cacheFileLocks.Dispose();
 
         _disposed = true;
     }
