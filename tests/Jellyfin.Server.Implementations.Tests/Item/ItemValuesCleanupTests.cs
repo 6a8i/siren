@@ -29,17 +29,18 @@ public sealed class ItemValuesCleanupTests : SqliteDbTestFixture
     }
 
     [Fact]
-    public void DeleteItem_LastReference_RemovesNewAndExistingOrphans()
+    public void DeleteItem_LastReference_RemovesOnlyValuesTheDeletedItemReferenced()
     {
         var deleted = CreateItem();
         var survivor = CreateItem();
         var referenced = CreateValue("Referenced");
+        var alreadyOrphaned = CreateValue("Already orphaned");
         using (var context = CreateDbContext())
         {
             context.ItemValuesMap.AddRange(
                 Map(deleted, CreateValue("Last reference")),
                 Map(survivor, referenced));
-            context.ItemValues.Add(CreateValue("Already orphaned"));
+            context.ItemValues.Add(alreadyOrphaned);
             context.SaveChanges();
         }
 
@@ -47,7 +48,11 @@ public sealed class ItemValuesCleanupTests : SqliteDbTestFixture
 
         using var after = CreateDbContext();
         Assert.False(after.BaseItems.Any(e => e.Id.Equals(deleted.Id)));
-        Assert.Equal(referenced.ItemValueId, Assert.Single(after.ItemValues).ItemValueId);
+        // The orphan sweep is scoped to the values the deleted items referenced, so deleting one item does
+        // not scan the whole ItemValues table. Values orphaned earlier are left to CleanDatabaseScheduledTask.
+        Assert.Equal(
+            new[] { alreadyOrphaned.ItemValueId, referenced.ItemValueId }.OrderBy(e => e).ToArray(),
+            after.ItemValues.Select(e => e.ItemValueId).AsEnumerable().OrderBy(e => e).ToArray());
         Assert.Equal(survivor.Id, Assert.Single(after.ItemValuesMap).ItemId);
     }
 

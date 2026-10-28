@@ -174,7 +174,7 @@ public class NextUpService : INextUpService
                 .Where(e => e.ParentIndexNumber == 0)
                 .Where(e => !e.IsVirtualItem);
             specialsQuery = _queryHelpers.ApplyAccessFiltering(context, specialsQuery, filter);
-            specialsQuery = _queryHelpers.ApplyNavigations(specialsQuery, filter).AsSingleQuery();
+            specialsQuery = _queryHelpers.ApplyNavigations(specialsQuery, filter).AsSplitQuery();
 
             foreach (var special in specialsQuery)
             {
@@ -309,7 +309,7 @@ public class NextUpService : INextUpService
         if (nextEpisodeIds.Count > 0)
         {
             var nextQuery = context.BaseItems.AsNoTracking().Where(e => nextEpisodeIds.Contains(e.Id));
-            nextQuery = _queryHelpers.ApplyNavigations(nextQuery, filter).AsSingleQuery();
+            nextQuery = _queryHelpers.ApplyNavigations(nextQuery, filter).AsSplitQuery();
             nextEpisodes = nextQuery.ToDictionary(e => e.Id);
         }
 

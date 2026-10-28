@@ -27,7 +27,7 @@ public sealed partial class BaseItemRepository
     public IQueryable<BaseItemEntity> PrepareItemQuery(JellyfinDbContext context, InternalItemsQuery filter)
     {
         IQueryable<BaseItemEntity> dbQuery = context.BaseItems.AsNoTracking();
-        dbQuery = dbQuery.AsSingleQuery();
+        dbQuery = dbQuery.AsSplitQuery();
 
         return dbQuery;
     }
@@ -65,7 +65,7 @@ public sealed partial class BaseItemRepository
         var start = Math.Max(index - 1, 0);
         var adjacentIds = orderedIds.GetRange(start, Math.Min(index + 2, orderedIds.Count) - start);
 
-        var adjacentQuery = context.BaseItems.AsNoTracking().AsSingleQuery().Where(e => adjacentIds.Contains(e.Id));
+        var adjacentQuery = context.BaseItems.AsNoTracking().AsSplitQuery().Where(e => adjacentIds.Contains(e.Id));
 
         return ApplyOrder(adjacentQuery, filter, context);
     }
@@ -114,10 +114,9 @@ public sealed partial class BaseItemRepository
             var groupedIds = dbQuery.GroupBy(e => e.SeriesPresentationUniqueKey).Select(e => e.Min(x => x.Id));
             dbQuery = context.BaseItems.AsNoTracking().Where(e => groupedIds.Contains(e.Id));
         }
-        else
-        {
-            dbQuery = dbQuery.Distinct();
-        }
+        // No DISTINCT in the default branch: the filters only use Where/Any/Contains subqueries,
+        // which never duplicate rows, and DISTINCT over the whole row (including the Data JSON)
+        // forces SQLite to materialize the full set before ORDER BY/LIMIT can use an index.
 
         if (filter.CollapseBoxSetItems == true)
         {
@@ -371,7 +370,7 @@ public sealed partial class BaseItemRepository
 
         if (orderedQuery is null)
         {
-            return query.OrderBy(e => e.SortName);
+            return query.OrderBy(e => e.SortName).ThenBy(e => e.Id);
         }
 
         // Add SortName as final tiebreaker
@@ -380,7 +379,9 @@ public sealed partial class BaseItemRepository
             orderedQuery = orderedQuery.ThenBy(e => e.SortName);
         }
 
-        return orderedQuery;
+        // Id as the last tiebreaker keeps the order deterministic, which split queries need so
+        // the paged root query and the per-collection queries agree on the same rows.
+        return orderedQuery.ThenBy(e => e.Id);
     }
 
     private IQueryable<BaseItemEntity> ApplySeriesDatePlayedOrder(

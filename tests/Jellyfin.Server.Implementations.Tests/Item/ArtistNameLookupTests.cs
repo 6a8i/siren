@@ -69,7 +69,9 @@ public sealed class ArtistNameLookupTests : SqliteDbTestFixture
         _recorder.Commands.Clear();
 
         Assert.Equal(artistId, manager.GetArtist(requestedName).Id);
-        var query = Assert.Single(_recorder.Commands, c => c.Sql.Contains("\"CleanName\" =", StringComparison.Ordinal));
+        // Item queries are split queries: the first command is the root BaseItems query, the ones after it
+        // load the included collections and repeat the same WHERE clause.
+        var query = _recorder.Commands.First(c => c.Sql.Contains("\"CleanName\" =", StringComparison.Ordinal));
         Assert.Contains(Explain(query), line => line.Contains("IX_BaseItems_Type_CleanName (Type=? AND CleanName=?)", StringComparison.Ordinal));
         Assert.Equal(artistId, Assert.Single(manager.GetArtists([requestedName])[requestedName]).Id);
     }

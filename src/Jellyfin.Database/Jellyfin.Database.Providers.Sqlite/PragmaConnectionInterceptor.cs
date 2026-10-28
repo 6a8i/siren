@@ -1,26 +1,37 @@
 using System.Collections.Generic;
 using System.Data.Common;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Database.Providers.Sqlite;
 
 /// <summary>
-/// Injects a series of PRAGMA on each connection starts.
+/// Injects a series of PRAGMA on each physical connection the first time it is opened.
 /// </summary>
+/// <remarks>
+/// EF Core opens and closes the connection around every query. With pooling on, the same
+/// physical SQLite handle is reused, and PRAGMA state persists on that handle, so the batch only
+/// needs to run once per handle instead of once per query.
+/// </remarks>
 public class PragmaConnectionInterceptor : DbConnectionInterceptor
 {
+    private static readonly object _initializedMarker = new();
+
     private readonly ILogger _logger;
     private readonly int? _cacheSize;
     private readonly string _lockingMode;
     private readonly int? _journalSizeLimit;
     private readonly int _tempStoreMode;
     private readonly int _syncMode;
+    private readonly long? _mmapSize;
     private readonly IDictionary<string, string> _customPragma;
+    private readonly ConditionalWeakTable<object, object> _initializedHandles = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PragmaConnectionInterceptor"/> class.
@@ -31,8 +42,9 @@ public class PragmaConnectionInterceptor : DbConnectionInterceptor
     /// <param name="journalSizeLimit">Journal Size.</param>
     /// <param name="tempStoreMode">The https://sqlite.org/pragma.html#pragma_temp_store pragma.</param>
     /// <param name="syncMode">The https://sqlite.org/pragma.html#pragma_synchronous pragma.</param>
+    /// <param name="mmapSize">The https://sqlite.org/pragma.html#pragma_mmap_size pragma, in bytes.</param>
     /// <param name="customPragma">A list of custom provided Pragma in the list of CustomOptions starting with "#PRAGMA:".</param>
-    public PragmaConnectionInterceptor(ILogger logger, int? cacheSize, string lockingMode, int? journalSizeLimit, int tempStoreMode, int syncMode, IDictionary<string, string> customPragma)
+    public PragmaConnectionInterceptor(ILogger logger, int? cacheSize, string lockingMode, int? journalSizeLimit, int tempStoreMode, int syncMode, long? mmapSize, IDictionary<string, string> customPragma)
     {
         _logger = logger;
         _cacheSize = cacheSize;
@@ -40,6 +52,7 @@ public class PragmaConnectionInterceptor : DbConnectionInterceptor
         _journalSizeLimit = journalSizeLimit;
         _tempStoreMode = tempStoreMode;
         _syncMode = syncMode;
+        _mmapSize = mmapSize;
         _customPragma = customPragma;
 
         InitialCommand = BuildCommandText();
@@ -52,6 +65,11 @@ public class PragmaConnectionInterceptor : DbConnectionInterceptor
     public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
     {
         base.ConnectionOpened(connection, eventData);
+
+        if (!MarkInitialized(connection))
+        {
+            return;
+        }
 
         using (var command = connection.CreateCommand())
         {
@@ -67,6 +85,11 @@ public class PragmaConnectionInterceptor : DbConnectionInterceptor
     {
         await base.ConnectionOpenedAsync(connection, eventData, cancellationToken).ConfigureAwait(false);
 
+        if (!MarkInitialized(connection))
+        {
+            return;
+        }
+
         var command = connection.CreateCommand();
         await using (command.ConfigureAwait(false))
         {
@@ -75,6 +98,21 @@ public class PragmaConnectionInterceptor : DbConnectionInterceptor
 #pragma warning restore CA2100 // Review SQL queries for security vulnerabilities
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> the first time the physical SQLite handle behind <paramref name="connection"/>
+    /// is seen, and <c>false</c> for later logical opens of the same pooled handle.
+    /// Connections without a native handle (or non-SQLite ones) always run the batch.
+    /// </summary>
+    private bool MarkInitialized(DbConnection connection)
+    {
+        if (connection is not SqliteConnection { Handle: { } handle })
+        {
+            return true;
+        }
+
+        return _initializedHandles.TryAdd(handle, _initializedMarker);
     }
 
     private string BuildCommandText()
@@ -97,6 +135,11 @@ public class PragmaConnectionInterceptor : DbConnectionInterceptor
 
         sb.AppendLine(CultureInfo.InvariantCulture, $"PRAGMA synchronous={_syncMode};");
         sb.AppendLine(CultureInfo.InvariantCulture, $"PRAGMA temp_store={_tempStoreMode};");
+
+        if (_mmapSize.HasValue)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"PRAGMA mmap_size={_mmapSize.Value};");
+        }
 
         foreach (var item in _customPragma)
         {

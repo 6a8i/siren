@@ -84,15 +84,19 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
                 sqLiteOptions => sqLiteOptions.MigrationsAssembly(GetType().Assembly))
             // TODO: Remove when https://github.com/dotnet/efcore/pull/35873 is merged & released
             .ConfigureWarnings(warnings =>
-                warnings.Ignore(RelationalEventId.NonTransactionalMigrationOperationWarning)
-                    .Ignore(RelationalEventId.MultipleCollectionIncludeWarning))
+                warnings.Ignore(RelationalEventId.NonTransactionalMigrationOperationWarning))
             .AddInterceptors(new PragmaConnectionInterceptor(
                 _logger,
-                GetOption<int?>(customOptions, "cacheSize", e => int.Parse(e, CultureInfo.InvariantCulture)),
+                // Negative values are KiB. 32 MiB is a ceiling, not an allocation: SQLite only
+                // keeps as many pages as it touches, so small databases stay small.
+                GetOption(customOptions, "cacheSize", e => int.Parse(e, CultureInfo.InvariantCulture), () => -32_768),
                 GetOption(customOptions, "lockingmode", e => e, () => "NORMAL")!,
                 GetOption(customOptions, "journalsizelimit", int.Parse, () => 134_217_728),
                 GetOption(customOptions, "tempstoremode", int.Parse, () => 2),
                 GetOption(customOptions, "syncmode", int.Parse, () => 1),
+                // Memory-mapped reads of the database file: 256 MiB of address space, backed by the
+                // OS page cache, so hot index pages are not copied through SQLite's own cache.
+                GetOption(customOptions, "mmapsize", long.Parse, () => 268_435_456L),
                 customOptions?.Where(e => e.Key.StartsWith("#PRAGMA:", StringComparison.OrdinalIgnoreCase)).ToDictionary(e => e.Key["#PRAGMA:".Length..], e => e.Value) ?? []));
 
         var enableSensitiveDataLogging = GetOption(customOptions, "EnableSensitiveDataLogging", e => e.Equals(bool.TrueString, StringComparison.OrdinalIgnoreCase), () => false);

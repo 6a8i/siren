@@ -494,7 +494,7 @@ public sealed partial class BaseItemRepository
             ? ApplyNavigations(
                     context.BaseItems.AsNoTracking().Where(e => entitiesToFetch.Contains(e.Id)),
                     filter)
-                .AsSingleQuery()
+                .AsSplitQuery()
                 .ToDictionary(e => e.Id)
             : [];
 
@@ -571,7 +571,7 @@ public sealed partial class BaseItemRepository
             .Include(e => e.UserData)
             .Include(e => e.Images)
             .Include(e => e.LinkedChildEntities)
-            .AsSingleQuery();
+            .AsSplitQuery();
 
         var item = dbQuery.FirstOrDefault(e => e.Id == id);
         if (item is null)

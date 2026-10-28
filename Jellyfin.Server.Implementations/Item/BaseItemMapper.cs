@@ -34,6 +34,12 @@ public static class BaseItemMapper
     /// </summary>
     private static readonly ConcurrentDictionary<string, Type?> _typeMap = new ConcurrentDictionary<string, Type?>();
 
+    /// <summary>
+    /// Caches whether a type carries <see cref="RequiresSourceSerialisationAttribute"/>, which is
+    /// otherwise looked up by reflection on every item read and write.
+    /// </summary>
+    private static readonly ConcurrentDictionary<Type, bool> _requiresDeserialization = new ConcurrentDictionary<Type, bool>();
+
     private static UserData[] DetachUserData(BaseItemEntity entity)
     {
         if (entity.UserData is null || entity.UserData.Count == 0)
@@ -484,7 +490,7 @@ public static class BaseItemMapper
     /// <returns>True if the type requires deserialization.</returns>
     public static bool TypeRequiresDeserialization(Type type)
     {
-        return type.GetCustomAttribute<RequiresSourceSerialisationAttribute>() == null;
+        return _requiresDeserialization.GetOrAdd(type, static t => t.GetCustomAttribute<RequiresSourceSerialisationAttribute>() == null);
     }
 
     /// <summary>
