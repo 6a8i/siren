@@ -66,42 +66,71 @@ Legenda: **feito**, **planejado** (fase futura), **descartado** (com o motivo).
   bloqueio e desbloqueio, cabeçalhos, 429 na 11ª tentativa de login), mais a conferência no
   navegador do painel de famílias, do seletor de perfis, do bloqueio e da cor de destaque.
 
-## Fase 2 (planejado)
+## Fase 2a (concluída em 2026-10-28)
 
 ### Servidor
 
-- Cauda do roadmap de performance, agora medível com as linhas de S14: índices e
-  colunas promovidas em `BaseItems` com FTS5 (itens 35, 37, 38), serialização do
-  campo `Data` (39), campos mínimos por endpoint (44), memoização de ids (45),
-  tiles de trickplay no ffmpeg (52), backoff de refresh com falha (56), carga de
-  plugins (61) e source generation do JSON (65).
-- ~~Bloqueio de PIN temporário (minutos) em vez de desativar o perfil, para a família não
-  depender do administrador para destravar.~~ Feito na terceira rodada: 15 minutos
-  (`Users.LockedOutUntil`, migração `AddLockedOutUntil`), `Unlock` para encerrar antes; ver
-  `families.md`.
-- ~~Endpoint com os nomes das bibliotecas que a família alcança, para o administrador da
-  família ver também as que ele próprio não acessa.~~ Feito na terceira rodada:
-  `GET /Families/{id}/Libraries` e `GET /Families/Mine/Libraries`; a imagem de perfil de um
-  membro também passou a ser definida pela API de famílias (`POST|DELETE .../Members/{userId}/Image`).
-- Escopos para chaves de API (somente leitura, por biblioteca).
-- Segundo fator para o administrador do servidor.
-- CSP completa, com teste de reprodução em todos os players.
-- Perfil infantil com interface simplificada (além do preset de classificação).
-- Visão "quem está assistindo agora" para o administrador da família, com base nas
-  sessões já filtradas por família (S6).
-- Limites do rate limit configuráveis pelo painel.
+| # | Item | Estado | Como ficou |
+|---|------|--------|------------|
+| S17 | Bloqueio de PIN temporário em vez de desativar o perfil | feito | 15 minutos (`Users.LockedOutUntil`, migração `AddLockedOutUntil`); `POST .../Members/{userId}/Unlock` encerra antes; perfis sem família mantêm o comportamento do upstream |
+| S18 | Bibliotecas que a família alcança, por nome | feito | `GET /Families/{id}/Libraries` e `GET /Families/Mine/Libraries` (`FamilyLibraryDto`) |
+| S19 | Imagem de perfil definida pelo administrador da família | feito | `POST|DELETE /Families/{id}/Members/{userId}/Image`; `ImageUploadHelper` compartilhado com `/UserImage` |
+| S20 | CSP completa em modo relatório | feito | `ContentSecurityPolicyMode` (`Off`, `ReportOnly`, `Enforce`; padrão `ReportOnly`), `POST /System/CspReport` com limite de 20 relatos por minuto no log; a primeira rodada no navegador só acusou o SDK do Chromecast, já liberado |
+| S21 | Rate limit de autenticação configurável | feito | `AuthenticationRateLimitPerMinute` (padrão 10; 0 desliga) |
+| S22 | Performance 45: ids por nome memoizados e pessoas carregadas em lote | feito | `ItemByNameIdCache` (LRU de 8192), `GetPersonsByName` |
+| S23 | Performance 61: carga de plugins | feito | só DLLs que referenciam o servidor são carregadas; dependências sob demanda; uma passagem de reflexão |
+| — | "Quem está assistindo agora" para o administrador da família | feito | não precisou de servidor: usa as sessões já filtradas por família (S6) |
 
 ### Cliente web
 
-- Suíte Playwright (login, troca de perfil, criação de família, reprodução) rodando
-  no CI contra uma instância descartável.
+| # | Item | Estado | Como ficou |
+|---|------|--------|------------|
+| W11 | Contagem regressiva do bloqueio e desbloqueio pelo endpoint novo | feito | chip "Bloqueado por N min", prompt com a hora do desbloqueio, destrava sozinho quando o tempo passa |
+| W12 | Bibliotecas da família por nome nos diálogos | feito | `useFamilyLibraries`; o administrador da família vê até as que ele próprio não acessa |
+| W13 | Seção "Assistindo agora" no modo gerenciar | feito | sessões da família a cada 10 s e pelo web socket; dispositivo, item em reprodução e progresso |
+| W14 | Avatares com presets | feito | 8 cores × 12 ícones renderizados em PNG 256 px e enviados pela API de famílias |
+| W15 | Suíte Playwright | feito | 7 testes contra um servidor descartável na porta 8097 (`npm run test:e2e`, `docs/e2e.md`), workflow `e2e.yml` ainda não executado no GitHub |
+| W16 | Polyfills ES5 | feito | removidos regenerator, whatwg-fetch, proxy-polyfill e element-closest; os demais ficam documentados em `browser-support.md` |
+| W17 | Configurações de segurança no painel | feito | seção "Segurança" na página de rede: cabeçalhos, modo da CSP e limite de logins |
+
+### Verificação da fase 2a
+
+- Servidor: build Release e Debug da solução inteira, 4.303 testes aprovados, `dotnet format`
+  com analisadores.
+- Instância descartável: cenário de API com 38 verificações (CSP e relato de violação,
+  bibliotecas por nome, imagem de membro, bloqueio temporário com `Unlock`, 429 na 11ª
+  tentativa), suíte Playwright (7 testes) e conferência no navegador do painel de rede, dos
+  avatares, da seção "Assistindo agora" e da contagem regressiva do bloqueio.
+
+## Fase 2b (planejado)
+
+### Servidor
+
+- Cauda do roadmap de performance que exige medição com dados reais: índices e colunas
+  promovidas em `BaseItems` com FTS5 (itens 35, 37, 38), serialização do campo `Data` (39),
+  campos mínimos por endpoint (44), tiles de trickplay no ffmpeg (52), backoff de refresh com
+  falha (56) e source generation do JSON (65). O banco atual tem 1 MB, então esses itens só
+  valem com uma biblioteca grande para comparar.
+- Escopos para chaves de API (somente leitura, por biblioteca); exige migração própria.
+- Segundo fator para o administrador do servidor, só no cliente web (os apps oficiais não
+  sabem pedir o segundo fator).
+- Passar a CSP para `Enforce` depois de alguns dias sem violações no log, com teste de
+  reprodução em todos os players.
+- Perfil infantil com interface simplificada (além do preset de classificação).
+
+### Cliente web
+
+- Executar o workflow `e2e.yml` no GitHub e ampliar a suíte (criação de família pelo painel,
+  reprodução).
 - Migração das views legadas (login, wizard, cadastro e edição de usuários) para
   React e MUI.
-- Upload de avatar e presets de cor e ícone na tela da família.
-- Seções da tela inicial por perfil, aproveitando as preferências de exibição.
-- Remover os polyfills ES5 que `src/lib/legacy` ainda importa.
+- Upload de uma foto própria como avatar (hoje só presets).
+- Remover as dependências de polyfill que sobraram no `package.json` e trocar o
+  `classList.replace` do slideshow para dispensar o `classlist.js`.
 - Tradução das strings novas para os demais idiomas do cliente (hoje só en-US e
   pt-BR; os outros caem no inglês).
+- Seções da tela inicial por perfil já existem nas preferências de exibição do upstream;
+  nada a fazer.
 
 ## Fora do roadmap
 
