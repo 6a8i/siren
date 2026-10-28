@@ -263,6 +263,12 @@ public class ServerConfiguration : BaseApplicationConfiguration
     public int AuthenticationRateLimitPerMinute { get; set; } = 10;
 
     /// <summary>
+    /// Gets or sets the free space, in GB, below which the daily disk space check warns about the drive
+    /// holding the data, cache, transcoding or log directory. Zero disables the check.
+    /// </summary>
+    public int LowDiskSpaceWarningGb { get; set; } = 5;
+
+    /// <summary>
     /// Gets or sets the number of days we should retain activity logs.
     /// </summary>
     public int? ActivityLogRetentionDays { get; set; } = 30;

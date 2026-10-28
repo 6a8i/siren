@@ -201,6 +201,32 @@ restauração vive só em memória. O painel web
 tem uma página de backups que lista e cria arquivos; para restaurar por ela a página precisa
 enviar o `ArchiveFileName` que a listagem devolve, prefixo incluído, exatamente como a API.
 
+## Espaço em disco
+
+A tarefa **Verificar espaço em disco** (chave `CheckDiskSpace`, categoria Manutenção) roda a cada
+**24 horas** e mede o espaço livre do disco que guarda cada uma destas pastas: dados (`DataPath`),
+cache (`CachePath`), transcodificação (`TranscodingTempPath` das opções de codificação, ou
+`cache/transcodes`) e logs (`LogDirectoryPath`). Links simbólicos são resolvidos antes de achar o
+disco, e pastas no mesmo disco contam uma vez só.
+
+- **Limite:** `LowDiskSpaceWarningGb` em `config/system.xml` (`ServerConfiguration`), padrão
+  **5** (GB decimais, 10⁹ bytes, como o painel mostra); `0` desliga a verificação. Lido a cada
+  execução, sem reiniciar.
+- **Quando um disco fica abaixo:** uma linha de aviso no log
+  (`Low disk space on C:\ holding C:\ProgramData\Jellyfin\data, C:\ProgramData\Jellyfin\cache: 3.2 GB free, below the 5 GB threshold`)
+  e uma entrada `LowDiskSpace` (severidade `Warning`) no registro de atividades, com as pastas
+  afetadas e os GB livres; o disco vai em `ShortOverview`. Texto em `LowDiskSpaceWithPathsAndFree`.
+- **No máximo uma vez por dia por disco:** rodar a tarefa a mão não repete o aviso de um disco já
+  avisado nas últimas 24 h; um disco que volta a ter espaço e cai de novo avisa na hora. A memória
+  disso vive no processo e zera ao reiniciar.
+- Uma pasta cujo disco não pôde ser medido (caminho inexistente, montagem fora da lista de
+  volumes) sai no log como `Could not measure the free space of <pasta>` e é ignorada.
+
+A decisão fica em `Jellyfin.Server.Implementations/StorageHelpers/LowDiskSpaceChecker.cs`; a
+tarefa (`Emby.Server.Implementations/ScheduledTasks/Tasks/CheckDiskSpaceTask.cs`) só mede e grava.
+Isso não substitui o mínimo que o próprio servidor exige para subir e para fazer backup (5 GiB,
+`StorageHelper`), só avisa antes de chegar lá.
+
 ## Carga de plugins
 
 Na inicialização o servidor lê os metadados de cada `.dll` da pasta de cada plugin ativo (ou só
