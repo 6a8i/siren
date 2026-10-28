@@ -1365,6 +1365,9 @@ namespace Jellyfin.Server.Implementations.Migrations
                     b.Property<DateTime?>("LastLoginDate")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("LockedOutUntil")
+                        .HasColumnType("TEXT");
+
                     b.Property<int?>("LoginAttemptsBeforeLockout")
                         .HasColumnType("INTEGER");
 

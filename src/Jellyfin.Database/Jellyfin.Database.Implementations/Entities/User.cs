@@ -155,6 +155,14 @@ namespace Jellyfin.Database.Implementations.Entities
         public int? LoginAttemptsBeforeLockout { get; set; }
 
         /// <summary>
+        /// Gets or sets the UTC time until which the user is locked out after too many wrong PINs, or
+        /// <c>null</c> when the user is not locked out this way. Only family members are locked out
+        /// for a while (<see cref="Family.LockoutDuration"/>); users outside a family are disabled
+        /// instead. A value in the past has no effect and is cleared by the next successful login.
+        /// </summary>
+        public DateTime? LockedOutUntil { get; set; }
+
+        /// <summary>
         /// Gets or sets the maximum number of active sessions the user can have at once.
         /// </summary>
         public int MaxActiveSessions { get; set; }

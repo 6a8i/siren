@@ -22,7 +22,7 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
                 "Jellyfin.Database.Implementations.Entities.User",
                 typeof(User),
                 baseEntityType,
-                propertyCount: 33,
+                propertyCount: 34,
                 navigationCount: 6,
                 foreignKeyCount: 1,
                 unnamedIndexCount: 3,
@@ -147,6 +147,16 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
                 fieldInfo: typeof(User).GetField("<LastLoginDate>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
                 nullable: true);
             lastLoginDate.SetValueConverter(new ValueConverter<DateTime, DateTime>(
+                DateTime (DateTime v) => v.ToUniversalTime(),
+                DateTime (DateTime v) => DateTime.SpecifyKind(v, DateTimeKind.Utc)));
+
+            var lockedOutUntil = runtimeEntityType.AddProperty(
+                "LockedOutUntil",
+                typeof(DateTime?),
+                propertyInfo: typeof(User).GetProperty("LockedOutUntil", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                fieldInfo: typeof(User).GetField("<LockedOutUntil>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                nullable: true);
+            lockedOutUntil.SetValueConverter(new ValueConverter<DateTime, DateTime>(
                 DateTime (DateTime v) => v.ToUniversalTime(),
                 DateTime (DateTime v) => DateTime.SpecifyKind(v, DateTimeKind.Utc)));
 

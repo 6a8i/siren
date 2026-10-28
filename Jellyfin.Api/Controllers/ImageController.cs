@@ -8,7 +8,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Mime;
-using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Api.Attributes;
@@ -27,7 +26,6 @@ using MediaBrowser.Model.Drawing;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.IO;
-using MediaBrowser.Model.Net;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -50,6 +48,7 @@ public class ImageController : BaseJellyfinApiController
     private readonly ILogger<ImageController> _logger;
     private readonly IServerConfigurationManager _serverConfigurationManager;
     private readonly IApplicationPaths _appPaths;
+    private readonly ImageUploadHelper _imageUploadHelper;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ImageController"/> class.
@@ -62,6 +61,7 @@ public class ImageController : BaseJellyfinApiController
     /// <param name="logger">Instance of the <see cref="ILogger{ImageController}"/> interface.</param>
     /// <param name="serverConfigurationManager">Instance of the <see cref="IServerConfigurationManager"/> interface.</param>
     /// <param name="appPaths">Instance of the <see cref="IApplicationPaths"/> interface.</param>
+    /// <param name="imageUploadHelper">Instance of the <see cref="ImageUploadHelper"/> class.</param>
     public ImageController(
         IUserManager userManager,
         ILibraryManager libraryManager,
@@ -70,7 +70,8 @@ public class ImageController : BaseJellyfinApiController
         IFileSystem fileSystem,
         ILogger<ImageController> logger,
         IServerConfigurationManager serverConfigurationManager,
-        IApplicationPaths appPaths)
+        IApplicationPaths appPaths,
+        ImageUploadHelper imageUploadHelper)
     {
         _userManager = userManager;
         _libraryManager = libraryManager;
@@ -80,10 +81,8 @@ public class ImageController : BaseJellyfinApiController
         _logger = logger;
         _serverConfigurationManager = serverConfigurationManager;
         _appPaths = appPaths;
+        _imageUploadHelper = imageUploadHelper;
     }
-
-    private static CryptoStream GetFromBase64Stream(Stream inputStream)
-        => new CryptoStream(inputStream, new FromBase64Transform(), CryptoStreamMode.Read);
 
     /// <summary>
     /// Sets the user image.
@@ -115,37 +114,7 @@ public class ImageController : BaseJellyfinApiController
             return StatusCode(StatusCodes.Status403Forbidden, "User is not allowed to update the image.");
         }
 
-        if (!TryGetImageExtensionFromContentType(Request.ContentType, out string? extension))
-        {
-            return BadRequest("Incorrect ContentType.");
-        }
-
-        var stream = GetFromBase64Stream(Request.Body);
-        await using (stream.ConfigureAwait(false))
-        {
-            // Handle image/png; charset=utf-8
-            var mimeType = Request.ContentType?.Split(';').FirstOrDefault();
-            var userConfigurationDirectoryPath = _serverConfigurationManager.ApplicationPaths.UserConfigurationDirectoryPath;
-            var userDataPath = Path.Combine(userConfigurationDirectoryPath, user.Username);
-            if (!PathHelper.IsContainedIn(userConfigurationDirectoryPath, userDataPath))
-            {
-                return BadRequest("Invalid user.");
-            }
-
-            if (user.ProfileImage is not null)
-            {
-                await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
-            }
-
-            user.ProfileImage = new Database.Implementations.Entities.ImageInfo(Path.Combine(userDataPath, "profile" + extension));
-
-            await _providerManager
-                .SaveImage(stream, mimeType, user.ProfileImage.Path)
-                .ConfigureAwait(false);
-            await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
-
-            return NoContent();
-        }
+        return await _imageUploadHelper.SaveUserImageAsync(user, Request).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -221,21 +190,7 @@ public class ImageController : BaseJellyfinApiController
             return StatusCode(StatusCodes.Status403Forbidden, "User is not allowed to delete the image.");
         }
 
-        if (user.ProfileImage is null)
-        {
-            return NoContent();
-        }
-
-        try
-        {
-            System.IO.File.Delete(user.ProfileImage.Path);
-        }
-        catch (IOException e)
-        {
-            _logger.LogError(e, "Error deleting user profile image:");
-        }
-
-        await _userManager.ClearProfileImageAsync(user).ConfigureAwait(false);
+        await _imageUploadHelper.DeleteUserImageAsync(user).ConfigureAwait(false);
         return NoContent();
     }
 
@@ -366,12 +321,12 @@ public class ImageController : BaseJellyfinApiController
             return NotFound();
         }
 
-        if (!TryGetImageExtensionFromContentType(Request.ContentType, out _))
+        if (!ImageUploadHelper.TryGetImageExtensionFromContentType(Request.ContentType, out _))
         {
             return BadRequest("Incorrect ContentType.");
         }
 
-        var stream = GetFromBase64Stream(Request.Body);
+        var stream = ImageUploadHelper.GetFromBase64Stream(Request.Body);
         await using (stream.ConfigureAwait(false))
         {
             // Handle image/png; charset=utf-8
@@ -410,12 +365,12 @@ public class ImageController : BaseJellyfinApiController
             return NotFound();
         }
 
-        if (!TryGetImageExtensionFromContentType(Request.ContentType, out _))
+        if (!ImageUploadHelper.TryGetImageExtensionFromContentType(Request.ContentType, out _))
         {
             return BadRequest("Incorrect ContentType.");
         }
 
-        var stream = GetFromBase64Stream(Request.Body);
+        var stream = ImageUploadHelper.GetFromBase64Stream(Request.Body);
         await using (stream.ConfigureAwait(false))
         {
             // Handle image/png; charset=utf-8
@@ -1726,12 +1681,12 @@ public class ImageController : BaseJellyfinApiController
     [AcceptsImageFile]
     public async Task<ActionResult> UploadCustomSplashscreen()
     {
-        if (!TryGetImageExtensionFromContentType(Request.ContentType, out var extension))
+        if (!ImageUploadHelper.TryGetImageExtensionFromContentType(Request.ContentType, out var extension))
         {
             return BadRequest("Incorrect ContentType.");
         }
 
-        var stream = GetFromBase64Stream(Request.Body);
+        var stream = ImageUploadHelper.GetFromBase64Stream(Request.Body);
         await using (stream.ConfigureAwait(false))
         {
             var filePath = Path.Combine(_appPaths.DataPath, "splashscreen-upload" + extension);
@@ -2079,24 +2034,5 @@ public class ImageController : BaseJellyfinApiController
         return !string.IsNullOrEmpty(ifNoneMatch)
             && (string.Equals(ifNoneMatch, $"\"{tag}\"", StringComparison.Ordinal)
                 || string.Equals(ifNoneMatch, tag, StringComparison.Ordinal));
-    }
-
-    internal static bool TryGetImageExtensionFromContentType(string? contentType, [NotNullWhen(true)] out string? extension)
-    {
-        extension = null;
-        if (string.IsNullOrEmpty(contentType))
-        {
-            return false;
-        }
-
-        if (MediaTypeHeaderValue.TryParse(contentType, out var parsedValue)
-            && parsedValue.MediaType.HasValue
-            && MimeTypes.IsImage(parsedValue.MediaType.Value))
-        {
-            extension = MimeTypes.ToExtension(parsedValue.MediaType.Value);
-            return extension is not null;
-        }
-
-        return false;
     }
 }

@@ -588,6 +588,22 @@ namespace Jellyfin.Server.Implementations.Users
                     user = await UserQuery(dbContext).FirstOrDefaultAsync(e => e.Id == user.Id).ConfigureAwait(false) ?? user;
                 }
 
+                // A family profile locked out by wrong PINs is refused before the PIN is even looked
+                // at, so the lockout cannot be used to keep guessing.
+                if (user is not null && user.LockedOutUntil is { } lockedOutUntil && lockedOutUntil > DateTime.UtcNow)
+                {
+                    _logger.LogInformation(
+                        "Authentication request for {UserName} has been denied because this account is locked out until {LockedOutUntil:u} (IP: {IP}).",
+                        username,
+                        lockedOutUntil,
+                        remoteEndPoint);
+                    throw new SecurityException(string.Format(
+                        CultureInfo.InvariantCulture,
+                        "The {0} account is locked out until {1:u} after too many wrong PINs. Try again later or ask a family administrator to unlock it.",
+                        user.Username,
+                        lockedOutUntil));
+                }
+
                 var authResult = await AuthenticateLocalUser(username, password, user)
                     .ConfigureAwait(false);
                 var authenticationProvider = authResult.AuthenticationProvider;
@@ -698,33 +714,64 @@ namespace Jellyfin.Server.Implementations.Users
                         user.LastLoginDate = date;
                     }
 
+                    // A lockout that has run out is forgotten here, with the wrong attempts. The entity
+                    // is kept in sync for the same reason as the dates above.
                     await dbContext.Users
                         .Where(e => e.Id == user.Id)
-                        .ExecuteUpdateAsync(e => e.SetProperty(f => f.InvalidLoginAttemptCount, 0))
+                        .ExecuteUpdateAsync(e => e
+                            .SetProperty(f => f.InvalidLoginAttemptCount, 0)
+                            .SetProperty(f => f.LockedOutUntil, (DateTime?)null))
                         .ConfigureAwait(false);
+                    user.InvalidLoginAttemptCount = 0;
+                    user.LockedOutUntil = null;
                     _logger.LogInformation("Authentication request for {UserName} has succeeded.", user.Username);
                 }
                 else
                 {
                     user.InvalidLoginAttemptCount++;
                     int? maxInvalidLogins = user.LoginAttemptsBeforeLockout;
-                    if (maxInvalidLogins.HasValue && user.InvalidLoginAttemptCount >= maxInvalidLogins)
+                    if (maxInvalidLogins.HasValue && user.InvalidLoginAttemptCount >= maxInvalidLogins && user.FamilyId.HasValue)
                     {
-                        user.SetPermission(PermissionKind.IsDisabled, true);
-                        dbContext.Update(user);
-                        await dbContext.SaveChangesAsync()
+                        // A family profile is locked out for a while instead of disabled: the family
+                        // does not depend on an administrator to get the profile back, and the PIN
+                        // still cannot be guessed at any useful rate. The attempts start over after
+                        // the lockout.
+                        var lockoutEnd = DateTime.UtcNow.Add(Family.LockoutDuration);
+                        await dbContext.Users
+                            .Where(e => e.Id == user.Id)
+                            .ExecuteUpdateAsync(e => e
+                                .SetProperty(f => f.LockedOutUntil, lockoutEnd)
+                                .SetProperty(f => f.InvalidLoginAttemptCount, 0))
                             .ConfigureAwait(false);
+                        user.LockedOutUntil = lockoutEnd;
+                        user.InvalidLoginAttemptCount = 0;
                         await _eventManager.PublishAsync(new UserLockedOutEventArgs(user)).ConfigureAwait(false);
                         _logger.LogWarning(
-                            "Disabling user {Username} due to {Attempts} unsuccessful login attempts.",
+                            "Locking out family profile {Username} until {LockedOutUntil:u} due to {Attempts} unsuccessful login attempts.",
                             user.Username,
-                            user.InvalidLoginAttemptCount);
+                            lockoutEnd,
+                            maxInvalidLogins);
                     }
+                    else
+                    {
+                        if (maxInvalidLogins.HasValue && user.InvalidLoginAttemptCount >= maxInvalidLogins)
+                        {
+                            user.SetPermission(PermissionKind.IsDisabled, true);
+                            dbContext.Update(user);
+                            await dbContext.SaveChangesAsync()
+                                .ConfigureAwait(false);
+                            await _eventManager.PublishAsync(new UserLockedOutEventArgs(user)).ConfigureAwait(false);
+                            _logger.LogWarning(
+                                "Disabling user {Username} due to {Attempts} unsuccessful login attempts.",
+                                user.Username,
+                                user.InvalidLoginAttemptCount);
+                        }
 
-                    await dbContext.Users
-                        .Where(e => e.Id == user.Id)
-                        .ExecuteUpdateAsync(e => e.SetProperty(f => f.InvalidLoginAttemptCount, f => f.InvalidLoginAttemptCount + 1))
-                        .ConfigureAwait(false);
+                        await dbContext.Users
+                            .Where(e => e.Id == user.Id)
+                            .ExecuteUpdateAsync(e => e.SetProperty(f => f.InvalidLoginAttemptCount, f => f.InvalidLoginAttemptCount + 1))
+                            .ConfigureAwait(false);
+                    }
 
                     _logger.LogInformation(
                         "Authentication request for {UserName} has been denied (IP: {IP}).",

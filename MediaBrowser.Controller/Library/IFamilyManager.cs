@@ -79,4 +79,12 @@ public interface IFamilyManager
     /// <param name="familyId">The family id, or <c>null</c>.</param>
     /// <returns>A task.</returns>
     Task AssignUserAsync(Guid userId, Guid? familyId);
+
+    /// <summary>
+    /// Ends a profile's PIN lockout early: clears <see cref="User.LockedOutUntil"/> and the count of
+    /// wrong PINs. Nothing else about the user changes; a disabled profile stays disabled.
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <returns>A task.</returns>
+    Task UnlockMemberAsync(Guid userId);
 }

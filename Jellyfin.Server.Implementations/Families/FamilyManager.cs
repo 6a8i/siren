@@ -236,6 +236,21 @@ public sealed class FamilyManager : IFamilyManager
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task UnlockMemberAsync(Guid userId)
+    {
+        var user = _userManager.GetUserById(userId) ?? throw new ResourceNotFoundException("User not found.");
+        if (user.LockedOutUntil is null && user.InvalidLoginAttemptCount == 0)
+        {
+            return;
+        }
+
+        user.LockedOutUntil = null;
+        user.InvalidLoginAttemptCount = 0;
+        await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
+        _logger.LogInformation("Unlocked profile {Username} ({Id})", user.Username, user.Id);
+    }
+
     private static string ValidateName(string name)
     {
         name = (name ?? string.Empty).Trim();

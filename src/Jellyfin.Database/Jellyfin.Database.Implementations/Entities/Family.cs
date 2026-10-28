@@ -26,9 +26,15 @@ public class Family : IHasConcurrencyToken
 
     /// <summary>
     /// The number of wrong PINs a profile created through the Families API may enter before it is
-    /// locked out. A family administrator unlocks it by enabling the profile again.
+    /// locked out for <see cref="LockoutDuration"/>.
     /// </summary>
     public const int LoginAttemptsBeforeLockout = 5;
+
+    /// <summary>
+    /// How long a family profile stays locked out after <see cref="LoginAttemptsBeforeLockout"/>
+    /// wrong PINs (<see cref="User.LockedOutUntil"/>). A family administrator may unlock it earlier.
+    /// </summary>
+    public static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// The ids in <see cref="EnabledFolders"/> are separated by commas, which never appear in a Guid.

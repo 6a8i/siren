@@ -4,8 +4,10 @@ using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
+using Jellyfin.Api.Attributes;
 using Jellyfin.Api.Constants;
 using Jellyfin.Api.Extensions;
+using Jellyfin.Api.Helpers;
 using Jellyfin.Api.Models.FamilyDtos;
 using Jellyfin.Data;
 using Jellyfin.Data.Events.Families;
@@ -43,6 +45,8 @@ public class FamilyController : BaseJellyfinApiController
     private readonly IPlaylistManager _playlistManager;
     private readonly IAuthorizationContext _authContext;
     private readonly IEventManager _eventManager;
+    private readonly ILibraryManager _libraryManager;
+    private readonly ImageUploadHelper _imageUploadHelper;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FamilyController"/> class.
@@ -53,13 +57,17 @@ public class FamilyController : BaseJellyfinApiController
     /// <param name="playlistManager">Instance of the <see cref="IPlaylistManager"/> interface.</param>
     /// <param name="authContext">Instance of the <see cref="IAuthorizationContext"/> interface.</param>
     /// <param name="eventManager">Instance of the <see cref="IEventManager"/> interface.</param>
+    /// <param name="libraryManager">Instance of the <see cref="ILibraryManager"/> interface.</param>
+    /// <param name="imageUploadHelper">Instance of the <see cref="ImageUploadHelper"/> class.</param>
     public FamilyController(
         IFamilyManager familyManager,
         IUserManager userManager,
         ISessionManager sessionManager,
         IPlaylistManager playlistManager,
         IAuthorizationContext authContext,
-        IEventManager eventManager)
+        IEventManager eventManager,
+        ILibraryManager libraryManager,
+        ImageUploadHelper imageUploadHelper)
     {
         _familyManager = familyManager;
         _userManager = userManager;
@@ -67,6 +75,8 @@ public class FamilyController : BaseJellyfinApiController
         _playlistManager = playlistManager;
         _authContext = authContext;
         _eventManager = eventManager;
+        _libraryManager = libraryManager;
+        _imageUploadHelper = imageUploadHelper;
     }
 
     private bool IsServerAdministrator => User.IsInRole(UserRoles.Administrator);
@@ -127,6 +137,27 @@ public class FamilyController : BaseJellyfinApiController
     }
 
     /// <summary>
+    /// Gets the libraries the current user's family reaches, by name, whether or not the current
+    /// profile reaches them itself.
+    /// </summary>
+    /// <response code="200">Libraries returned.</response>
+    /// <response code="404">The current user does not belong to a family.</response>
+    /// <returns>The libraries.</returns>
+    [HttpGet("Mine/Libraries")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<IReadOnlyList<FamilyLibraryDto>> GetMyFamilyLibraries()
+    {
+        var family = GetCaller()?.FamilyId is { } familyId ? _familyManager.GetFamily(familyId) : null;
+        if (family is null)
+        {
+            return NotFound("The current user does not belong to a family.");
+        }
+
+        return Ok(GetLibraries(family));
+    }
+
+    /// <summary>
     /// Gets a family.
     /// </summary>
     /// <param name="familyId">The family id.</param>
@@ -152,6 +183,35 @@ public class FamilyController : BaseJellyfinApiController
         }
 
         return ToDto(family);
+    }
+
+    /// <summary>
+    /// Gets the libraries a family reaches, by name: every library of the server when the family
+    /// reaches everything.
+    /// </summary>
+    /// <param name="familyId">The family id.</param>
+    /// <response code="200">Libraries returned.</response>
+    /// <response code="403">The current user is not a member of the family.</response>
+    /// <response code="404">Family not found.</response>
+    /// <returns>The libraries.</returns>
+    [HttpGet("{familyId}/Libraries")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<IReadOnlyList<FamilyLibraryDto>> GetFamilyLibraries([FromRoute, Required] Guid familyId)
+    {
+        var family = _familyManager.GetFamily(familyId);
+        if (family is null)
+        {
+            return NotFound("Family not found.");
+        }
+
+        if (!CanView(family))
+        {
+            return Forbidden("Only members of the family can see its libraries.");
+        }
+
+        return Ok(GetLibraries(family));
     }
 
     /// <summary>
@@ -315,8 +375,8 @@ public class FamilyController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Adds a profile to a family. The profile is locked out after a few wrong PINs; a family
-    /// administrator unlocks it by enabling it again.
+    /// Adds a profile to a family. The profile is locked out for a while after a few wrong PINs; a
+    /// family administrator may unlock it earlier.
     /// </summary>
     /// <param name="familyId">The family id.</param>
     /// <param name="request">The profile to create.</param>
@@ -525,8 +585,140 @@ public class FamilyController : BaseJellyfinApiController
         {
             await _sessionManager.RevokeUserTokens(member.Id, null).ConfigureAwait(false);
         }
+        else
+        {
+            // ... and so is a lockout that is still running.
+            await _familyManager.UnlockMemberAsync(member.Id).ConfigureAwait(false);
+        }
 
         return ToMemberDto(_userManager.GetUserById(member.Id)!, family);
+    }
+
+    /// <summary>
+    /// Ends a profile's PIN lockout early. Only the lockout and the count of wrong PINs are cleared;
+    /// a disabled profile stays disabled.
+    /// </summary>
+    /// <param name="familyId">The family id.</param>
+    /// <param name="userId">The profile's user id.</param>
+    /// <response code="204">Profile unlocked, or it was not locked out.</response>
+    /// <response code="403">The current user does not manage the family.</response>
+    /// <response code="404">Family or profile not found.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpPost("{familyId}/Members/{userId}/Unlock")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> UnlockMember(
+        [FromRoute, Required] Guid familyId,
+        [FromRoute, Required] Guid userId)
+    {
+        var family = _familyManager.GetFamily(familyId);
+        if (family is null)
+        {
+            return NotFound("Family not found.");
+        }
+
+        if (!CanManage(family))
+        {
+            return Forbidden("Only a family administrator can unlock profiles.");
+        }
+
+        var member = GetMember(family, userId);
+        if (member is null)
+        {
+            return NotFound("Profile not found in this family.");
+        }
+
+        await _familyManager.UnlockMemberAsync(member.Id).ConfigureAwait(false);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Sets the image of a family profile from a base64-encoded body, like <c>POST /UserImage</c>.
+    /// </summary>
+    /// <param name="familyId">The family id.</param>
+    /// <param name="userId">The profile's user id.</param>
+    /// <response code="204">Image updated.</response>
+    /// <response code="400">The content type is not an image.</response>
+    /// <response code="403">The current user neither manages the family nor is the profile.</response>
+    /// <response code="404">Family or profile not found.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpPost("{familyId}/Members/{userId}/Image")]
+    [AcceptsImageFile]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> PostMemberImage(
+        [FromRoute, Required] Guid familyId,
+        [FromRoute, Required] Guid userId)
+    {
+        var family = _familyManager.GetFamily(familyId);
+        if (family is null)
+        {
+            return NotFound("Family not found.");
+        }
+
+        if (!CanView(family))
+        {
+            return Forbidden("Only members of the family can see its profiles.");
+        }
+
+        var member = GetMember(family, userId);
+        if (member is null)
+        {
+            return NotFound("Profile not found in this family.");
+        }
+
+        if (!CanManageProfile(family, member))
+        {
+            return Forbidden("Only a family administrator or the profile itself can change its image.");
+        }
+
+        return await _imageUploadHelper.SaveUserImageAsync(member, Request).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Deletes the image of a family profile.
+    /// </summary>
+    /// <param name="familyId">The family id.</param>
+    /// <param name="userId">The profile's user id.</param>
+    /// <response code="204">Image deleted, or there was none.</response>
+    /// <response code="403">The current user neither manages the family nor is the profile.</response>
+    /// <response code="404">Family or profile not found.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpDelete("{familyId}/Members/{userId}/Image")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> DeleteMemberImage(
+        [FromRoute, Required] Guid familyId,
+        [FromRoute, Required] Guid userId)
+    {
+        var family = _familyManager.GetFamily(familyId);
+        if (family is null)
+        {
+            return NotFound("Family not found.");
+        }
+
+        if (!CanView(family))
+        {
+            return Forbidden("Only members of the family can see its profiles.");
+        }
+
+        var member = GetMember(family, userId);
+        if (member is null)
+        {
+            return NotFound("Profile not found in this family.");
+        }
+
+        if (!CanManageProfile(family, member))
+        {
+            return Forbidden("Only a family administrator or the profile itself can change its image.");
+        }
+
+        await _imageUploadHelper.DeleteUserImageAsync(member).ConfigureAwait(false);
+        return NoContent();
     }
 
     /// <summary>
@@ -697,6 +889,11 @@ public class FamilyController : BaseJellyfinApiController
             return Forbidden("This profile is disabled.");
         }
 
+        if (target.LockedOutUntil is { } lockedOutUntil && lockedOutUntil > DateTime.UtcNow)
+        {
+            return Forbidden(string.Format(CultureInfo.InvariantCulture, "This profile is locked out until {0:u}.", lockedOutUntil));
+        }
+
         var auth = await _authContext.GetAuthorizationInfo(Request).ConfigureAwait(false);
         var result = await _sessionManager.AuthenticateNewSession(new AuthenticationRequest
         {
@@ -789,6 +986,44 @@ public class FamilyController : BaseJellyfinApiController
                 && Nullable.Equals(caller.FamilyId, family.Id)
                 && caller.HasPermission(PermissionKind.IsFamilyAdministrator));
 
+    /// <summary>
+    /// Whether the caller manages the family or is the profile itself.
+    /// </summary>
+    private bool CanManageProfile(Family family, User member)
+        => CanManage(family) || (GetCaller() is { } caller && caller.Id.Equals(member.Id));
+
+    /// <summary>
+    /// Lists the libraries the family reaches, by name: every library of the server when the family
+    /// reaches everything, otherwise the family's libraries that still exist.
+    /// </summary>
+    private IReadOnlyList<FamilyLibraryDto> GetLibraries(Family family)
+    {
+        var reach = family.GetLibraryReach();
+        var libraries = new List<FamilyLibraryDto>();
+        foreach (var folder in _libraryManager.GetVirtualFolders())
+        {
+            // A library whose folder has not been resolved yet has no id, so nothing can reach it.
+            if (!Guid.TryParse(folder.ItemId, out var id) || id.IsEmpty())
+            {
+                continue;
+            }
+
+            if (reach is not null && !reach.Contains(id))
+            {
+                continue;
+            }
+
+            libraries.Add(new FamilyLibraryDto
+            {
+                Id = id,
+                Name = folder.Name,
+                CollectionType = folder.CollectionType
+            });
+        }
+
+        return libraries;
+    }
+
     private User? GetMember(Family family, Guid userId)
     {
         var user = _userManager.GetUserById(userId);
@@ -814,6 +1049,8 @@ public class FamilyController : BaseJellyfinApiController
     {
         var source = _userManager.GetUserDto(user, HttpContext.GetNormalizedRemoteIP().ToString());
         var hasPin = !string.IsNullOrEmpty(user.Password);
+        // A lockout that has run out is over, whatever the row still says until the next login.
+        var lockedOutUntil = user.LockedOutUntil is { } until && until > DateTime.UtcNow ? until : (DateTime?)null;
         var dto = new FamilyMemberDto
         {
             Name = source.Name,
@@ -829,9 +1066,12 @@ public class FamilyController : BaseJellyfinApiController
             Policy = source.Policy,
             PrimaryImageAspectRatio = source.PrimaryImageAspectRatio,
             HasPin = hasPin,
-            IsLockedOut = user.HasPermission(PermissionKind.IsDisabled)
-                && user.LoginAttemptsBeforeLockout is > 0
-                && user.InvalidLoginAttemptCount >= user.LoginAttemptsBeforeLockout,
+            // Profiles locked before the timed lockout existed were disabled with the attempts used up.
+            IsLockedOut = lockedOutUntil.HasValue
+                || (user.HasPermission(PermissionKind.IsDisabled)
+                    && user.LoginAttemptsBeforeLockout is > 0
+                    && user.InvalidLoginAttemptCount >= user.LoginAttemptsBeforeLockout),
+            LockedOutUntil = lockedOutUntil,
             HasAllFamilyFolders = user.HasAllFamilyFolders(family)
         };
 #pragma warning disable CS0618 // Older clients read the PIN flag from the obsolete properties; kept for one more release.

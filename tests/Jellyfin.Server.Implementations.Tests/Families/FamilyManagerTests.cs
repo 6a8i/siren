@@ -295,6 +295,29 @@ public sealed class FamilyManagerTests : IDisposable
         Assert.Equal(new[] { a, b }, _userManager.GetUserById(loner.Id)!.GetPreferenceValues<Guid>(PreferenceKind.EnabledFolders));
     }
 
+    [Fact]
+    public async Task UnlockMember_ClearsTheLockoutAndTheWrongPins_AndNothingElse()
+    {
+        var family = await _familyManager.CreateFamilyAsync("Locked");
+        var member = await _userManager.CreateUserAsync("locked");
+        await _familyManager.AssignUserAsync(member.Id, family.Id);
+
+        var stored = _userManager.GetUserById(member.Id)!;
+        stored.LockedOutUntil = DateTime.UtcNow.AddMinutes(10);
+        stored.InvalidLoginAttemptCount = 3;
+        stored.SetPermission(PermissionKind.IsDisabled, true);
+        await _userManager.UpdateUserAsync(stored);
+
+        await _familyManager.UnlockMemberAsync(member.Id);
+
+        var after = _userManager.GetUserById(member.Id)!;
+        Assert.Null(after.LockedOutUntil);
+        Assert.Equal(0, after.InvalidLoginAttemptCount);
+        Assert.True(after.HasPermission(PermissionKind.IsDisabled));
+
+        await Assert.ThrowsAsync<ResourceNotFoundException>(() => _familyManager.UnlockMemberAsync(Guid.NewGuid()));
+    }
+
     private JellyfinDbContext CreateDbContext()
     {
         return new JellyfinDbContext(

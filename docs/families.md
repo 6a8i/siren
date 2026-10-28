@@ -13,13 +13,17 @@ desbloquear, remover) sem nenhum acesso ao painel do servidor.
 |---|---|
 | `Families` (tabela) | `Id`, `Name`, `DateCreated`, `EnableAllFolders` (padrão `true`), `EnabledFolders` (ids das bibliotecas separados por vírgula, `NULL` para nenhuma; `Family.GetEnabledFolderIds`/`SetEnabledFolderIds`), `RowVersion`. Migração `AddFamilyLibraryAccess`. |
 | `Users.FamilyId` | Família do usuário, ou `NULL` para contas fora de qualquer família (admins do servidor e contas antigas). FK com `ON DELETE SET NULL`. |
+| `Users.LockedOutUntil` | `DateTime?` em UTC: até quando o perfil está bloqueado por PINs errados, ou `NULL`. Só membros de família recebem valor; um valor no passado não tem efeito e é limpo no próximo login. Migração `AddLockedOutUntil`. |
 | `PermissionKind.IsFamilyAdministrator` (24) | Perfil que administra a própria família. |
-| `UserDto.FamilyId`, `UserPolicy.IsFamilyAdministrator` | Expostos na API para o cliente. |
+| `UserDto.FamilyId`, `UserPolicy.IsFamilyAdministrator` | Expostos na API para o cliente. `LockedOutUntil` **não** entra no `UserDto` genérico (clientes do SDK upstream não quebram); fica só no `FamilyMemberDto`. |
 | `FamilyDto` | `Id`, `Name`, `DateCreated`, `MemberCount`, `MaxMembers`, `EnableAllFolders`, `EnabledFolders`. |
-| `FamilyMemberDto` | `UserDto` mais `HasPin` (o perfil tem senha), `IsLockedOut` (desativado por PINs errados) e `HasAllFamilyFolders` (alcança tudo o que a família alcança). Devolvido por todos os endpoints de membros. |
+| `FamilyMemberDto` | `UserDto` mais `HasPin` (o perfil tem senha), `IsLockedOut` (bloqueado por PINs errados), `LockedOutUntil` (`DateTime?` UTC, fim do bloqueio em curso ou `null`) e `HasAllFamilyFolders` (alcança tudo o que a família alcança). Devolvido por todos os endpoints de membros. |
+| `FamilyLibraryDto` | `Id`, `Name`, `CollectionType` (`CollectionTypeOptions?`, o mesmo de `GET /Library/VirtualFolders`): uma biblioteca que a família alcança, pelo nome. |
 | `Family.MaxMembers` | 6, aplicado em `FamilyManager.AssignUserAsync` e em `POST /Families/{id}/Members`. |
 | `Family.LoginAttemptsBeforeLockout` | 5, `LoginAttemptsBeforeLockout` dos perfis criados pela API de famílias. |
+| `Family.LockoutDuration` | 15 minutos: quanto tempo um membro fica bloqueado depois de esgotar as tentativas. |
 | `FamilyEntityExtensions` (`Jellyfin.Data`) | `GetLibraryReach`, `CapToFamily(user, family)` e `HasAllFamilyFolders`: a regra de alcance em um só lugar. |
+| `ImageUploadHelper` (`Jellyfin.Api/Helpers`) | Lê uploads de imagem (corpo em base64, formato no `Content-Type`) e grava/apaga a imagem de perfil de um usuário; usado por `POST|DELETE /UserImage` e pelos endpoints de imagem de membro, para que os dois caminhos gravem o mesmo arquivo e atualizem o mesmo cache de usuários. |
 
 Regras aplicadas no servidor:
 
@@ -42,9 +46,28 @@ Regras aplicadas no servidor:
 - **Bloqueio por PIN.** Perfis criados pela API de famílias (inclusive o primeiro administrador de uma
   família nova) nascem com `LoginAttemptsBeforeLockout = 5`; contas vinculadas e perfis criados antes do bloqueio
   existir recebem o mesmo 5 quando não têm limite (rotina `SetFamilyProfileLockout` na atualização);
-  um limite escolhido pelo administrador do servidor é mantido. Depois de 5 PINs errados o perfil é desativado (`IsLockedOut = true`). Editar o membro com
-  `IsDisabled = false` reativa e zera `InvalidLoginAttemptCount` (é o desbloqueio); um administrador de
-  família não desativa a si mesmo, mas desbloqueia qualquer perfil da família.
+  um limite escolhido pelo administrador do servidor é mantido. Depois de 5 PINs errados um **membro de
+  família** fica bloqueado por 15 minutos (`Family.LockoutDuration`): `UserManager.AuthenticateUser`
+  grava `LockedOutUntil = agora + 15 min`, zera `InvalidLoginAttemptCount` e **não** desativa o perfil;
+  o evento `UserLockedOut` do log de atividade continua sendo publicado. Enquanto `LockedOutUntil` está
+  no futuro, `AuthenticateUser` (login por nome e `Switch`) recusa o perfil **antes** de conferir o PIN,
+  com `SecurityException` (403); passado o prazo o perfil entra normalmente e o próximo login bem-sucedido
+  limpa `LockedOutUntil`. Contas fora de família mantêm o comportamento do upstream (desativadas).
+  No `FamilyMemberDto`, `IsLockedOut = LockedOutUntil > agora`, com o critério antigo (desativado com as
+  tentativas esgotadas) como fallback para perfis bloqueados antes desta mudança; `LockedOutUntil` só vem
+  preenchido enquanto o bloqueio está em curso. Desbloqueio: `POST /Families/{id}/Members/{userId}/Unlock`
+  (`IFamilyManager.UnlockMemberAsync`) limpa só `LockedOutUntil` e as tentativas, sem tocar no resto da
+  política; editar o membro com `IsDisabled = false` continua reativando e também desbloqueia. Um
+  administrador de família não desativa a si mesmo, mas desbloqueia qualquer perfil da família.
+- **Bibliotecas pelo nome.** `GET /Families/{id}/Libraries` e `GET /Families/Mine/Libraries` listam as
+  bibliotecas que a família alcança com `Id`, `Name` e `CollectionType`, a partir de
+  `ILibraryManager.GetVirtualFolders()` (não das views de quem chama): todas as bibliotecas do servidor
+  quando a família alcança tudo, senão só as da lista da família que existem. Assim o administrador da
+  família vê também as que o próprio perfil não acessa.
+- **Imagem de perfil.** `POST|DELETE /Families/{id}/Members/{userId}/Image` seguem a convenção de
+  `POST /UserImage` (corpo em base64, `Content-Type` da imagem) e são permitidos ao administrador do
+  servidor, aos administradores daquela família e ao próprio perfil; os dois caminhos passam pelo
+  `ImageUploadHelper`.
 - A família precisa manter ao menos um administrador de família quando quem edita é um
   administrador de família; o administrador do servidor pode deixar a família sem nenhum.
 
@@ -70,20 +93,26 @@ Regras aplicadas no servidor:
 | GET | `/Families` | admin do servidor | |
 | POST | `/Families` | admin do servidor | `{ Name }` |
 | GET | `/Families/Mine` | qualquer usuário | 404 sem família |
+| GET | `/Families/Mine/Libraries` | qualquer usuário | `FamilyLibraryDto[]` com as bibliotecas da própria família; 404 sem família |
 | GET | `/Families/{id}` | admin ou membro | |
+| GET | `/Families/{id}/Libraries` | admin ou membro | `FamilyLibraryDto[]`: `Id`, `Name`, `CollectionType`; todas as do servidor quando a família alcança tudo |
 | POST | `/Families/{id}` | admin ou admin da família | `{ Name?, EnableAllFolders?, EnabledFolders? }` → 204. Campo ausente mantém o valor; `EnabledFolders` sem `EnableAllFolders` vale como `false`. Os campos de biblioteca só pelo admin do servidor (403 para admin da família, que ainda renomeia); mudá-los limita todos os perfis |
 | DELETE | `/Families/{id}?deleteMembers=` | admin do servidor | `false` mantém os perfis como contas soltas |
 | GET | `/Families/{id}/Members` | admin ou membro | `FamilyMemberDto[]`; `HasPin` indica se o perfil pede PIN |
 | GET | `/Families/{id}/Members/{userId}` | admin ou membro | `FamilyMemberDto` |
 | POST | `/Families/{id}/Members` | admin ou admin da família | `{ Name, Password?, IsFamilyAdministrator?, MaxParentalRating?, EnableAllFolders?, EnabledFolders? }` → `FamilyMemberDto` |
 | PUT | `/Families/{id}/Members/{userId}` | admin do servidor | move uma conta existente para a família, limitada ao alcance dela |
-| POST | `/Families/{id}/Members/{userId}` | admin ou admin da família | `{ Name, IsFamilyAdministrator, IsDisabled, MaxParentalRating, EnableAllFolders, EnabledFolders }` → 200 `FamilyMemberDto`; `IsDisabled = false` também desbloqueia |
+| POST | `/Families/{id}/Members/{userId}` | admin ou admin da família | `{ Name, IsFamilyAdministrator, IsDisabled, MaxParentalRating, EnableAllFolders, EnabledFolders }` → 200 `FamilyMemberDto`; `IsDisabled = false` também desbloqueia (limpa `LockedOutUntil` e as tentativas) |
+| POST | `/Families/{id}/Members/{userId}/Unlock` | admin ou admin da família | sem corpo → 204; encerra o bloqueio por PIN (zera `LockedOutUntil` e `InvalidLoginAttemptCount`) sem mexer no resto da política; 204 também se não estava bloqueado |
 | POST | `/Families/{id}/Members/{userId}/Password` | admin ou admin da família | `{ NewPassword?, ResetPassword? }` |
+| POST | `/Families/{id}/Members/{userId}/Image` | admin, admin da família ou o próprio perfil | corpo em base64 com o `Content-Type` da imagem (como `POST /UserImage`) → 204; 400 se o `Content-Type` não é de imagem |
+| DELETE | `/Families/{id}/Members/{userId}/Image` | admin, admin da família ou o próprio perfil | → 204 (também sem imagem) |
 | DELETE | `/Families/{id}/Members/{userId}?deleteUser=` | admin ou admin da família | admin da família só com `true` e nunca a si mesmo |
-| POST | `/Families/{id}/Members/{userId}/Switch` | membro da mesma família | `{ Pw? }` → `AuthenticationResult` com o novo token; 403 se o perfil está desativado ou bloqueado |
+| POST | `/Families/{id}/Members/{userId}/Switch` | membro da mesma família | `{ Pw? }` → `AuthenticationResult` com o novo token; 403 se o perfil está desativado ou bloqueado (`LockedOutUntil` no futuro) |
 
 A troca de perfil (`Switch`) passa pelo mesmo caminho do login (`AuthenticateNewSession`): PIN errado
-conta como tentativa inválida (401) e respeita o bloqueio por tentativas.
+conta como tentativa inválida (401) e respeita o bloqueio por tentativas (403 enquanto `LockedOutUntil`
+está no futuro, antes de conferir o PIN).
 
 Log de atividade (eventos em `Jellyfin.Data/Events/Families`, consumidores em
 `Jellyfin.Server.Implementations/Events/Consumers/Families`, textos em `Localization/Core/*.json` com
@@ -181,3 +210,17 @@ Ajudantes novos: `RequestHelpers.GetUserScope(principal, userManager)` (o mesmo 
 - `tests/Jellyfin.Server.Integration.Tests/Controllers/FamilyIsolationTests.cs`: duas famílias criadas
   pela API (`POST /Families`, `POST /Families/{id}/Members`, `POST /Users/AuthenticateByName`):
   sessões, `GET /Users`, `GET /Users/{id}`, SyncPlay, compartilhamento de playlist e comandos de sessão.
+- `tests/Jellyfin.Server.Integration.Tests/Controllers/FamilyControllerTests.cs`: a vida de uma família
+  pela API, inclusive o bloqueio temporário (5 PINs errados → 401 cada, `IsLockedOut` com
+  `LockedOutUntil` ~15 min à frente, `Switch` → 403, `Unlock` → 204 → `Switch` → 200; editar com
+  `IsDisabled = false` também desbloqueia), as bibliotecas pelo nome (alcance total vs. restrito, `Mine`,
+  403 para membro de outra família, 404 sem família) e a imagem de membro (upload de um PNG mínimo,
+  substituição pelo próprio perfil, exclusão, 400 sem imagem, 403 para membro de outra família).
+- `tests/Jellyfin.Server.Implementations.Tests/Users/UserManagerLockoutTests.cs`: a transição do
+  bloqueio em `UserManager.AuthenticateUser` com o `CryptographyProvider` real: membro de família →
+  `LockedOutUntil` preenchido, não desativado, recusado antes do PIN enquanto dura, entra normalmente
+  depois; `UnlockMemberAsync` encerra antes; conta fora de família → desativada como no upstream.
+- `tests/Jellyfin.Server.Implementations.Tests/Families/FamilyManagerTests.cs`: `UnlockMemberAsync`
+  limpa só o bloqueio e as tentativas.
+- `tests/Jellyfin.Api.Tests/Helpers/ImageUploadHelperTests.cs`: o `Content-Type` aceito nos uploads
+  (antes em `ImageControllerTests`).

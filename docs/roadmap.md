@@ -75,10 +75,14 @@ Legenda: **feito**, **planejado** (fase futura), **descartado** (com o motivo).
   campo `Data` (39), campos mínimos por endpoint (44), memoização de ids (45),
   tiles de trickplay no ffmpeg (52), backoff de refresh com falha (56), carga de
   plugins (61) e source generation do JSON (65).
-- Bloqueio de PIN temporário (minutos) em vez de desativar o perfil, para a família não
-  depender do administrador para destravar.
-- Endpoint com os nomes das bibliotecas que a família alcança, para o administrador da
-  família ver também as que ele próprio não acessa.
+- ~~Bloqueio de PIN temporário (minutos) em vez de desativar o perfil, para a família não
+  depender do administrador para destravar.~~ Feito na terceira rodada: 15 minutos
+  (`Users.LockedOutUntil`, migração `AddLockedOutUntil`), `Unlock` para encerrar antes; ver
+  `families.md`.
+- ~~Endpoint com os nomes das bibliotecas que a família alcança, para o administrador da
+  família ver também as que ele próprio não acessa.~~ Feito na terceira rodada:
+  `GET /Families/{id}/Libraries` e `GET /Families/Mine/Libraries`; a imagem de perfil de um
+  membro também passou a ser definida pela API de famílias (`POST|DELETE .../Members/{userId}/Image`).
 - Escopos para chaves de API (somente leitura, por biblioteca).
 - Segundo fator para o administrador do servidor.
 - CSP completa, com teste de reprodução em todos os players.

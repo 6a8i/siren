@@ -1,9 +1,9 @@
-using Jellyfin.Api.Controllers;
+using Jellyfin.Api.Helpers;
 using Xunit;
 
-namespace Jellyfin.Api.Tests.Controllers;
+namespace Jellyfin.Api.Tests.Helpers;
 
-public static class ImageControllerTests
+public static class ImageUploadHelperTests
 {
     [Theory]
     [InlineData("image/apng", ".apng")]
@@ -19,7 +19,7 @@ public static class ImageControllerTests
     [InlineData("image/webp", ".webp")]
     public static void TryGetImageExtensionFromContentType_Valid_True(string contentType, string extension)
     {
-        Assert.True(ImageController.TryGetImageExtensionFromContentType(contentType, out var ex));
+        Assert.True(ImageUploadHelper.TryGetImageExtensionFromContentType(contentType, out var ex));
         Assert.Equal(extension, ex);
     }
 
@@ -29,7 +29,7 @@ public static class ImageControllerTests
     [InlineData("text/html")]
     public static void TryGetImageExtensionFromContentType_InValid_False(string? contentType)
     {
-        Assert.False(ImageController.TryGetImageExtensionFromContentType(contentType, out var ex));
+        Assert.False(ImageUploadHelper.TryGetImageExtensionFromContentType(contentType, out var ex));
         Assert.Null(ex);
     }
 }
