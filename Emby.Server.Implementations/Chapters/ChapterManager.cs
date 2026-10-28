@@ -181,16 +181,9 @@ public class ChapterManager : IChapterManager
 
                         _logger.LogDebug("Extracting chapter image for {Name} at {Time}", video.Name, time);
                         var tempFile = await _encoder.ExtractVideoImage(inputPath, container, mediaSource, video.GetDefaultVideoStream(), video.Video3DFormat, time, cancellationToken).ConfigureAwait(false);
-                        File.Copy(tempFile, path, true);
 
-                        try
-                        {
-                            _fileSystem.DeleteFile(tempFile);
-                        }
-                        catch (IOException ex)
-                        {
-                            _logger.LogError(ex, "Error deleting temporary chapter image encoding file {Path}", tempFile);
-                        }
+                        // A move is a rename when temp and cache share a volume; the copy plus delete it replaces read and wrote the file twice.
+                        File.Move(tempFile, path, true);
 
                         chapter.ImagePath = path;
                         chapter.ImageDateModified = _fileSystem.GetLastWriteTimeUtc(path);

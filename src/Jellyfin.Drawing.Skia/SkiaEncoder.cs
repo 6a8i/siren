@@ -355,6 +355,30 @@ public class SkiaEncoder : IImageEncoder
     /// <param name="origin">The detected origin of the image.</param>
     /// <returns>The resulting bitmap of the image.</returns>
     internal SKBitmap? Decode(string path, bool forceCleanBitmap, ImageOrientation? orientation, out SKEncodedOrigin origin)
+        => Decode(path, forceCleanBitmap, orientation, null, out origin, out _);
+
+    /// <summary>
+    /// Decode an image, no larger than it needs to be.
+    /// </summary>
+    /// <param name="path">The filepath of the image to decode.</param>
+    /// <param name="forceCleanBitmap">Whether to force clean the bitmap.</param>
+    /// <param name="orientation">The orientation of the image.</param>
+    /// <param name="minimumDecodeSize">
+    /// Given the encoded size, the smallest size the decoded bitmap may have (before orientation).
+    /// Codecs that can decode at a reduced scale (JPEG) then skip the pixels that would be thrown
+    /// away by the resize that follows; a 6000×4000 photo asked for as a 400px poster is decoded at
+    /// 750×500 instead of as a 96 MB bitmap. <c>null</c> decodes at full size.
+    /// </param>
+    /// <param name="origin">The detected origin of the image.</param>
+    /// <param name="encodedSize">The size of the encoded image, before any orientation is applied.</param>
+    /// <returns>The resulting bitmap of the image.</returns>
+    internal SKBitmap? Decode(
+        string path,
+        bool forceCleanBitmap,
+        ImageOrientation? orientation,
+        Func<ImageDimensions, ImageDimensions>? minimumDecodeSize,
+        out SKEncodedOrigin origin,
+        out ImageDimensions encodedSize)
     {
         if (!File.Exists(path))
         {
@@ -367,7 +391,7 @@ public class SkiaEncoder : IImageEncoder
         var isSafePathTemp = !string.Equals(safePath, path, StringComparison.Ordinal);
         try
         {
-            return DecodeCore(path, safePath, forceCleanBitmap, orientation, out origin);
+            return DecodeCore(path, safePath, forceCleanBitmap, orientation, minimumDecodeSize, out origin, out encodedSize);
         }
         finally
         {
@@ -385,16 +409,25 @@ public class SkiaEncoder : IImageEncoder
         }
     }
 
-    private SKBitmap? DecodeCore(string path, string safePath, bool forceCleanBitmap, ImageOrientation? orientation, out SKEncodedOrigin origin)
+    private SKBitmap? DecodeCore(
+        string path,
+        string safePath,
+        bool forceCleanBitmap,
+        ImageOrientation? orientation,
+        Func<ImageDimensions, ImageDimensions>? minimumDecodeSize,
+        out SKEncodedOrigin origin,
+        out ImageDimensions encodedSize)
     {
         var requiresTransparencyHack = _transparentImageTypes.Contains(Path.GetExtension(path));
 
-        if (requiresTransparencyHack || forceCleanBitmap)
+        // Only the codec path can decode at a reduced scale, so a size hint takes it as well.
+        if (requiresTransparencyHack || forceCleanBitmap || minimumDecodeSize is not null)
         {
             using SKCodec codec = SKCodec.Create(safePath, out SKCodecResult res);
             if (res != SKCodecResult.Success)
             {
                 origin = GetSKEncodedOrigin(orientation);
+                encodedSize = default;
                 return null;
             }
 
@@ -403,11 +436,15 @@ public class SkiaEncoder : IImageEncoder
                 throw new ArgumentException("Cannot decode images with multiple frames");
             }
 
+            var info = codec.Info;
+            encodedSize = new ImageDimensions(info.Width, info.Height);
+            var decodeSize = GetDecodeSize(codec, encodedSize, minimumDecodeSize);
+
             // create the bitmap
             SKBitmap? bitmap = null;
             try
             {
-                bitmap = new SKBitmap(codec.Info.Width, codec.Info.Height, !requiresTransparencyHack);
+                bitmap = new SKBitmap(decodeSize.Width, decodeSize.Height, !requiresTransparencyHack);
 
                 // decode
                 _ = codec.GetPixels(bitmap.Info, bitmap.GetPixels());
@@ -428,7 +465,7 @@ public class SkiaEncoder : IImageEncoder
 
         if (resultBitmap is null)
         {
-            return DecodeCore(path, safePath, true, orientation, out origin);
+            return DecodeCore(path, safePath, true, orientation, minimumDecodeSize, out origin, out encodedSize);
         }
 
         try
@@ -438,11 +475,12 @@ public class SkiaEncoder : IImageEncoder
             {
                 using (resultBitmap)
                 {
-                    return DecodeCore(path, safePath, true, orientation, out origin);
+                    return DecodeCore(path, safePath, true, orientation, minimumDecodeSize, out origin, out encodedSize);
                 }
             }
 
             origin = SKEncodedOrigin.TopLeft;
+            encodedSize = new ImageDimensions(resultBitmap.Width, resultBitmap.Height);
             return resultBitmap;
         }
         catch (Exception e)
@@ -453,14 +491,58 @@ public class SkiaEncoder : IImageEncoder
         }
     }
 
+    /// <summary>
+    /// Picks the size to decode at: the smallest reduced scale the codec offers that still covers the
+    /// size the caller needs, or the full size when the codec cannot scale or nothing smaller fits.
+    /// </summary>
+    private static ImageDimensions GetDecodeSize(SKCodec codec, ImageDimensions encodedSize, Func<ImageDimensions, ImageDimensions>? minimumDecodeSize)
+    {
+        if (minimumDecodeSize is null || encodedSize.Width <= 0 || encodedSize.Height <= 0)
+        {
+            return encodedSize;
+        }
+
+        var minimum = minimumDecodeSize(encodedSize);
+        if (minimum.Width <= 0 || minimum.Height <= 0 || minimum.Width >= encodedSize.Width || minimum.Height >= encodedSize.Height)
+        {
+            return encodedSize;
+        }
+
+        var scale = Math.Max((float)minimum.Width / encodedSize.Width, (float)minimum.Height / encodedSize.Height);
+        var scaled = codec.GetScaledDimensions(scale);
+        if (scaled.Width < minimum.Width || scaled.Height < minimum.Height || scaled.Width >= encodedSize.Width)
+        {
+            return encodedSize;
+        }
+
+        return new ImageDimensions(scaled.Width, scaled.Height);
+    }
+
     private SKBitmap? GetBitmap(string path, bool autoOrient, ImageOrientation? orientation)
+        => GetBitmap(path, autoOrient, orientation, null, out _);
+
+    /// <summary>
+    /// Gets the (oriented) bitmap of an image, decoded no larger than <paramref name="minimumDecodeSize"/> asks for.
+    /// </summary>
+    /// <param name="path">The image path.</param>
+    /// <param name="autoOrient">Whether to apply the encoded orientation.</param>
+    /// <param name="orientation">The known orientation, if any.</param>
+    /// <param name="minimumDecodeSize">The smallest acceptable decode size for a given encoded size.</param>
+    /// <param name="originalSize">The size of the image as stored, oriented the way the returned bitmap is.</param>
+    /// <returns>The bitmap.</returns>
+    private SKBitmap? GetBitmap(string path, bool autoOrient, ImageOrientation? orientation, Func<ImageDimensions, ImageDimensions>? minimumDecodeSize, out ImageDimensions originalSize)
     {
         if (autoOrient)
         {
-            var bitmap = Decode(path, true, orientation, out var origin);
+            var bitmap = Decode(path, true, orientation, minimumDecodeSize, out var origin, out originalSize);
 
             if (bitmap is not null && origin != SKEncodedOrigin.TopLeft)
             {
+                if (origin is SKEncodedOrigin.LeftTop or SKEncodedOrigin.RightTop or SKEncodedOrigin.RightBottom or SKEncodedOrigin.LeftBottom)
+                {
+                    originalSize = new ImageDimensions(originalSize.Height, originalSize.Width);
+                }
+
                 using (bitmap)
                 {
                     return OrientImage(bitmap, origin);
@@ -470,7 +552,7 @@ public class SkiaEncoder : IImageEncoder
             return bitmap;
         }
 
-        return Decode(path, false, orientation, out _);
+        return Decode(path, false, orientation, minimumDecodeSize, out _, out originalSize);
     }
 
     private SKBitmap? GetBitmapFromSvg(string path)
@@ -709,16 +791,41 @@ public class SkiaEncoder : IImageEncoder
         var blur = options.Blur ?? 0;
         var hasIndicator = options.UnplayedCount.HasValue || !options.PercentPlayed.Equals(0);
 
-        using var bitmap = inputFormat.Equals(SvgFormat, StringComparison.OrdinalIgnoreCase)
-            ? GetBitmapFromSvg(inputPath)
-            : GetBitmap(inputPath, autoOrient, orientation);
+        ImageDimensions originalImageSize;
+        SKBitmap? bitmap;
+        if (inputFormat.Equals(SvgFormat, StringComparison.OrdinalIgnoreCase))
+        {
+            bitmap = GetBitmapFromSvg(inputPath);
+            originalImageSize = bitmap is null ? default : new ImageDimensions(bitmap.Width, bitmap.Height);
+        }
+        else
+        {
+            // The decoded bitmap only has to be as large as the output; the resize below takes care
+            // of the rest. With an unknown orientation the bound is the larger output edge in both
+            // directions, so a rotated image still covers the output after it is turned.
+            bitmap = GetBitmap(
+                inputPath,
+                autoOrient,
+                orientation,
+                encodedSize =>
+                {
+                    var outputSize = ImageHelper.GetNewImageSize(options, encodedSize);
+                    if (!autoOrient)
+                    {
+                        return outputSize;
+                    }
 
+                    var bound = Math.Max(outputSize.Width, outputSize.Height);
+                    return new ImageDimensions(bound, bound);
+                },
+                out originalImageSize);
+        }
+
+        using var bitmapDisposer = bitmap;
         if (bitmap is null)
         {
             throw new InvalidDataException($"Skia unable to read image {inputPath}");
         }
-
-        var originalImageSize = new ImageDimensions(bitmap.Width, bitmap.Height);
 
         if (options.HasDefaultOptions(inputPath, originalImageSize) && !autoOrient)
         {

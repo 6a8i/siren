@@ -21,9 +21,9 @@ public class EncodingOptions
         DownMixAudioBoost = 2;
         DownMixStereoAlgorithm = DownMixStereoAlgorithms.None;
         MaxMuxingQueueSize = 2048;
-        EnableThrottling = false;
+        EnableThrottling = true;
         ThrottleDelaySeconds = 180;
-        EnableSegmentDeletion = false;
+        EnableSegmentDeletion = true;
         SegmentKeepSeconds = 720;
         EncodingThreadCount = -1;
         // This is a DRM device that is almost guaranteed to be there on every intel platform,

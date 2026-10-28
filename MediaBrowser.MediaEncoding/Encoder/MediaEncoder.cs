@@ -120,6 +120,13 @@ namespace MediaBrowser.MediaEncoding.Encoder
         private string _ffprobePath;
         private int _threads;
 
+        /// <summary>
+        /// Threads for a single-frame extraction. "-threads 0" (the transcoding default) lets ffmpeg decode
+        /// with one thread per core, and several extractions run at once, so the count is capped.
+        /// </summary>
+        private int GetImageExtractionThreads()
+            => _threads > 0 ? Math.Min(_threads, 4) : Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
+
         public MediaEncoder(
             ILogger<MediaEncoder> logger,
             IServerConfigurationManager configurationManager,
@@ -145,7 +152,9 @@ namespace MediaBrowser.MediaEncoding.Encoder
             var semaphoreCount = serverConfig.Configuration?.ParallelImageEncodingLimit ?? 0;
             if (semaphoreCount < 1)
             {
-                semaphoreCount = Environment.ProcessorCount;
+                // Every extraction is an ffmpeg process that decodes with several threads of its own,
+                // so one per core oversubscribed the machine during scans.
+                semaphoreCount = Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
             }
 
             _thumbnailResourcePool = new(semaphoreCount);
@@ -232,15 +241,25 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 // Determine a probe path from the mpeg path
                 _ffprobePath = FfprobePathRegex().Replace(_ffmpegPath, "ffprobe$1");
 
-                // Interrogate to understand what coders are supported
+                // Interrogate to understand what coders are supported. Each probe is its own ffmpeg
+                // process and they do not depend on each other, so they run side by side: this used
+                // to be twenty-odd sequential process launches on the startup path.
                 var validator = new EncoderValidator(_logger, _ffmpegPath);
 
-                SetAvailableDecoders(validator.GetDecoders());
-                SetAvailableEncoders(validator.GetEncoders());
-                SetAvailableFilters(validator.GetFilters());
-                SetAvailableFiltersWithOption(validator.GetFiltersWithOption());
-                SetAvailableBitStreamFiltersWithOption(validator.GetBitStreamFiltersWithOption());
-                SetAvailableHwaccels(validator.GetHwaccels());
+                var decodersTask = Task.Run(() => validator.GetDecoders().ToList());
+                var encodersTask = Task.Run(() => validator.GetEncoders().ToList());
+                var filtersTask = Task.Run(() => validator.GetFilters().ToList());
+                var filterOptionsTask = Task.Run(validator.GetFiltersWithOption);
+                var bsfOptionsTask = Task.Run(validator.GetBitStreamFiltersWithOption);
+                var hwaccelsTask = Task.Run(() => validator.GetHwaccels().ToList());
+                Task.WaitAll(decodersTask, encodersTask, filtersTask, filterOptionsTask, bsfOptionsTask, hwaccelsTask);
+
+                SetAvailableDecoders(decodersTask.Result);
+                SetAvailableEncoders(encodersTask.Result);
+                SetAvailableFilters(filtersTask.Result);
+                SetAvailableFiltersWithOption(filterOptionsTask.Result);
+                SetAvailableBitStreamFiltersWithOption(bsfOptionsTask.Result);
+                SetAvailableHwaccels(hwaccelsTask.Result);
                 SetMediaEncoderVersion(validator);
 
                 _threads = EncodingHelper.GetNumberOfThreads(null, options, null);
@@ -749,7 +768,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
             var enableThumbnail = !useTradeoff && useIFrame && !string.Equals("wtv", container, StringComparison.OrdinalIgnoreCase);
             if (enableThumbnail)
             {
-                filters.Add("thumbnail=n=24");
+                filters.Add("thumbnail=n=12");
             }
 
             // Use SW tonemap on HDR video stream only when the zscale or tonemapx filter is available.
@@ -778,7 +797,7 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 "-i {0}{1} -threads {2} -v quiet -vframes 1 -vf {3}{4}{5} -f image2 \"{6}\"",
                 inputPath,
                 mapArg,
-                _threads,
+                GetImageExtractionThreads(),
                 vf,
                 isAudio ? string.Empty : GetImageResolutionParameter(),
                 EncodingHelper.GetVideoSyncOption("-1", EncoderVersion), // auto decide fps mode

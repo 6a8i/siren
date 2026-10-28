@@ -803,20 +803,20 @@ namespace Emby.Server.Implementations.Library
             MediaInfo mediaInfo = null;
             var cacheFilePath = string.IsNullOrEmpty(cacheKey) ? null : Path.Combine(_appPaths.CachePath, "mediainfo", cacheKey.GetMD5().ToString("N", CultureInfo.InvariantCulture) + ".json");
 
-            if (!string.IsNullOrEmpty(cacheKey))
+            if (!string.IsNullOrEmpty(cacheKey) && File.Exists(cacheFilePath))
             {
-                FileStream jsonStream = AsyncFile.OpenRead(cacheFilePath);
+                // The open used to sit outside the try, so a cache miss threw and the cache never filled.
                 try
                 {
-                    mediaInfo = await JsonSerializer.DeserializeAsync<MediaInfo>(jsonStream, _jsonOptions, cancellationToken).ConfigureAwait(false);
+                    FileStream jsonStream = AsyncFile.OpenRead(cacheFilePath);
+                    await using (jsonStream.ConfigureAwait(false))
+                    {
+                        mediaInfo = await JsonSerializer.DeserializeAsync<MediaInfo>(jsonStream, _jsonOptions, cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex)
                 {
                     _logger.LogDebug(ex, "Error parsing cached media info.");
-                }
-                finally
-                {
-                    await jsonStream.DisposeAsync().ConfigureAwait(false);
                 }
             }
 

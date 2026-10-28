@@ -1457,9 +1457,12 @@ public class DynamicHlsController : BaseJellyfinApiController
 
         // Keep segment selection and transcoding replacement under the same playlist lock.
         // An out-of-order request must not replace a job while another request is using its output.
+        // Waiting for the segment to land on disk happens after the lock is released: the request
+        // is registered on the job by then (OnTranscodeBeginRequest), which is what keeps a later
+        // request from replacing the job while this one still reads from it.
+        TranscodingJob? job;
         using (await _transcodeManager.LockAsync(playlistPath, cancellationToken).ConfigureAwait(false))
         {
-            TranscodingJob? job;
             var startTranscoding = false;
             if (System.IO.File.Exists(segmentPath))
             {
@@ -1539,8 +1542,9 @@ public class DynamicHlsController : BaseJellyfinApiController
 
             _logger.LogDebug("returning {0} [general case]", segmentPath);
             job ??= _transcodeManager.OnTranscodeBeginRequest(playlistPath, TranscodingJobType);
-            return await GetSegmentResult(state, playlistPath, segmentPath, segmentExtension, segmentId, job, cancellationToken).ConfigureAwait(false);
         }
+
+        return await GetSegmentResult(state, playlistPath, segmentPath, segmentExtension, segmentId, job, cancellationToken).ConfigureAwait(false);
     }
 
     internal static async Task WaitForActiveTranscodingRequests(TranscodingJob? job, CancellationToken cancellationToken)
@@ -2025,21 +2029,16 @@ public class DynamicHlsController : BaseJellyfinApiController
             return null;
         }
 
-        var file = GetLastTranscodingFile(playlist, segmentExtension, _fileSystem);
-
-        if (file is null)
-        {
-            return null;
-        }
-
-        var playlistFilename = Path.GetFileNameWithoutExtension(playlist.AsSpan());
-
-        var indexString = Path.GetFileNameWithoutExtension(file.Name.AsSpan()).Slice(playlistFilename.Length);
-
-        return int.Parse(indexString, NumberStyles.Integer, CultureInfo.InvariantCulture);
+        return GetLastTranscodingFile(playlist, segmentExtension)?.Index;
     }
 
-    private static FileSystemMetadata? GetLastTranscodingFile(string playlist, string segmentExtension, IFileSystem fileSystem)
+    /// <summary>
+    /// Finds the segment ffmpeg wrote last for a playlist. Segments are numbered in the order they are
+    /// written, so the highest index is the newest one: this is a filtered directory enumeration with
+    /// no per-file stat, where it used to list the whole transcoding directory (every session's
+    /// segments) and read the write time of each file.
+    /// </summary>
+    private static (string Path, int Index)? GetLastTranscodingFile(string playlist, string segmentExtension)
     {
         var folder = Path.GetDirectoryName(playlist) ?? throw new ArgumentException("Path can't be a root directory.", nameof(playlist));
 
@@ -2047,9 +2046,23 @@ public class DynamicHlsController : BaseJellyfinApiController
 
         try
         {
-            return fileSystem.GetFiles(folder, new[] { segmentExtension }, true, false)
-                .Where(i => Path.GetFileNameWithoutExtension(i.Name).StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
-                .MaxBy(fileSystem.GetLastWriteTimeUtc);
+            (string Path, int Index)? last = null;
+            foreach (var file in Directory.EnumerateFiles(folder, filePrefix + "*" + segmentExtension))
+            {
+                var name = Path.GetFileNameWithoutExtension(file.AsSpan());
+                if (!name.StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase)
+                    || !int.TryParse(name[filePrefix.Length..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
+                {
+                    continue;
+                }
+
+                if (last is null || index > last.Value.Index)
+                {
+                    last = (file, index);
+                }
+            }
+
+            return last;
         }
         catch (IOException)
         {
@@ -2059,14 +2072,14 @@ public class DynamicHlsController : BaseJellyfinApiController
 
     private async Task DeleteLastFile(string playlistPath, string segmentExtension, int retryCount)
     {
-        var file = GetLastTranscodingFile(playlistPath, segmentExtension, _fileSystem);
+        var file = GetLastTranscodingFile(playlistPath, segmentExtension);
 
         if (file is null)
         {
             return;
         }
 
-        await DeleteFile(file.FullName, retryCount).ConfigureAwait(false);
+        await DeleteFile(file.Value.Path, retryCount).ConfigureAwait(false);
     }
 
     private async Task DeleteFile(string path, int retryCount)
