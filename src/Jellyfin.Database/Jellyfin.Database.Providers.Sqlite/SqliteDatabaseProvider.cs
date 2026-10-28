@@ -23,6 +23,22 @@ namespace Jellyfin.Database.Providers.Sqlite;
 public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
 {
     private const string BackupFolderName = "SQLiteBackups";
+
+    /// <summary>
+    /// Rows sampled per index by the scheduled ANALYZE. 0 means a full scan.
+    /// </summary>
+    private const int ScheduledAnalysisLimit = 1000;
+
+    /// <summary>
+    /// VACUUM only when at least this share of the pages is on the free list...
+    /// </summary>
+    private const long VacuumFreelistPercent = 10;
+
+    /// <summary>
+    /// ...and the free list is at least this many pages (about 10 MiB at the default page size), so a
+    /// small database never gets rewritten over a handful of free pages.
+    /// </summary>
+    private const long VacuumMinFreelistPages = 2560;
     private readonly IApplicationPaths _applicationPaths;
     private readonly ILogger<SqliteDatabaseProvider> _logger;
 
@@ -110,7 +126,17 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
     /// <inheritdoc/>
     public Task RunScheduledOptimisation(CancellationToken cancellationToken)
     {
-        return OptimizeAsync(cancellationToken);
+        // Approximate statistics (analysis_limit) are what SQLite recommends for periodic runs on large
+        // databases; the full scan is reserved for the post-migration run.
+        return OptimizeAsync(reclaimSpace: true, analysisLimit: ScheduledAnalysisLimit, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public Task RunPostMigrationOptimisation(CancellationToken cancellationToken)
+    {
+        // VACUUM rewrites the whole file under an exclusive lock, which is not something to block startup
+        // on; the scheduled task reclaims space when the file is actually fragmented.
+        return OptimizeAsync(reclaimSpace: false, analysisLimit: 0, cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -133,7 +159,7 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
                 }
 
                 _logger.LogInformation("Analyzing jellyfin.db");
-                await AnalyzeAsync(context, cancellationToken).ConfigureAwait(false);
+                await AnalyzeAsync(context, ScheduledAnalysisLimit, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -180,7 +206,7 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
         SqliteConnection.ClearAllPools();
     }
 
-    private async Task OptimizeAsync(CancellationToken cancellationToken)
+    private async Task OptimizeAsync(bool reclaimSpace, int analysisLimit, CancellationToken cancellationToken)
     {
         if (DbContextFactory is null)
         {
@@ -193,40 +219,18 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
             await context.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                long? tempStore;
-                var pragmaCommand = context.Database.GetDbConnection().CreateCommand();
-                await using (pragmaCommand.ConfigureAwait(false))
-                {
-                    pragmaCommand.CommandText = "PRAGMA temp_store";
-                    tempStore = await ReadPragmaValueAsync(pragmaCommand, cancellationToken).ConfigureAwait(false);
-                }
-
                 await context.Database.ExecuteSqlRawAsync("PRAGMA wal_checkpoint(TRUNCATE)", cancellationToken).ConfigureAwait(false);
 
-                _logger.LogDebug(
-                    "Rebuilding jellyfin.db on disk, scratch space goes to {TempDirectory}",
-                    Environment.GetEnvironmentVariable("SQLITE_TMPDIR") ?? "SQLite's default temporary directory");
-                await context.Database.ExecuteSqlRawAsync("PRAGMA temp_store=1", cancellationToken).ConfigureAwait(false);
-                try
+                if (reclaimSpace && await IsFragmentedAsync(context, cancellationToken).ConfigureAwait(false))
                 {
-                    await context.Database.ExecuteSqlRawAsync("VACUUM", cancellationToken).ConfigureAwait(false);
-                }
-                finally
-                {
-                    // The connection goes back to the pool, so hand it over the way it was handed to us.
-                    if (tempStore is not null)
-                    {
-                        await context.Database.ExecuteSqlRawAsync(
-                            FormattableString.Invariant($"PRAGMA temp_store={tempStore.Value}"),
-                            CancellationToken.None).ConfigureAwait(false);
-                    }
+                    await VacuumAsync(context, cancellationToken).ConfigureAwait(false);
                 }
 
                 // Statistics taken while the library is empty make the planner treat every table as one row and
                 // pick full scans once it fills up; no statistics at all plan far better until there is data.
                 if (await HasLibraryItemsAsync(context, cancellationToken).ConfigureAwait(false))
                 {
-                    await AnalyzeAsync(context, cancellationToken).ConfigureAwait(false);
+                    await AnalyzeAsync(context, analysisLimit, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -249,17 +253,55 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
         return context.BaseItems.AnyAsync(e => !e.IsFolder && e.Type != "PLACEHOLDER", cancellationToken);
     }
 
-    private static async Task AnalyzeAsync(JellyfinDbContext context, CancellationToken cancellationToken)
+    private async Task<bool> IsFragmentedAsync(JellyfinDbContext context, CancellationToken cancellationToken)
     {
-        long? analysisLimit;
-        var pragmaCommand = context.Database.GetDbConnection().CreateCommand();
-        await using (pragmaCommand.ConfigureAwait(false))
+        var freelistCount = await ReadPragmaValueAsync(context, "freelist_count", cancellationToken).ConfigureAwait(false) ?? 0;
+        var pageCount = await ReadPragmaValueAsync(context, "page_count", cancellationToken).ConfigureAwait(false) ?? 0;
+        if (pageCount == 0)
         {
-            pragmaCommand.CommandText = "PRAGMA analysis_limit";
-            analysisLimit = await ReadPragmaValueAsync(pragmaCommand, cancellationToken).ConfigureAwait(false);
+            return false;
         }
 
-        await context.Database.ExecuteSqlRawAsync("PRAGMA analysis_limit=0", cancellationToken).ConfigureAwait(false);
+        var freePercent = freelistCount * 100 / pageCount;
+        var fragmented = freelistCount >= VacuumMinFreelistPages && freePercent >= VacuumFreelistPercent;
+        _logger.LogInformation(
+            "jellyfin.db has {FreePages} free pages of {TotalPages} ({FreePercent}%), {Action}",
+            freelistCount,
+            pageCount,
+            freePercent,
+            fragmented ? "vacuuming" : "skipping vacuum");
+        return fragmented;
+    }
+
+    private async Task VacuumAsync(JellyfinDbContext context, CancellationToken cancellationToken)
+    {
+        var tempStore = await ReadPragmaValueAsync(context, "temp_store", cancellationToken).ConfigureAwait(false);
+
+        _logger.LogDebug(
+            "Rebuilding jellyfin.db on disk, scratch space goes to {TempDirectory}",
+            Environment.GetEnvironmentVariable("SQLITE_TMPDIR") ?? "SQLite's default temporary directory");
+        await context.Database.ExecuteSqlRawAsync("PRAGMA temp_store=1", cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("VACUUM", cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // The connection goes back to the pool, so hand it over the way it was handed to us.
+            if (tempStore is not null)
+            {
+                await context.Database.ExecuteSqlRawAsync(
+                    FormattableString.Invariant($"PRAGMA temp_store={tempStore.Value}"),
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static async Task AnalyzeAsync(JellyfinDbContext context, int analysisLimit, CancellationToken cancellationToken)
+    {
+        var previousLimit = await ReadPragmaValueAsync(context, "analysis_limit", cancellationToken).ConfigureAwait(false);
+
+        await context.Database.ExecuteSqlRawAsync(FormattableString.Invariant($"PRAGMA analysis_limit={analysisLimit}"), cancellationToken).ConfigureAwait(false);
         try
         {
             await context.Database.ExecuteSqlRawAsync("ANALYZE", cancellationToken).ConfigureAwait(false);
@@ -267,12 +309,24 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
         finally
         {
             // The connection goes back to the pool, so hand it over the way it was handed to us.
-            if (analysisLimit is not null)
+            if (previousLimit is not null)
             {
                 await context.Database.ExecuteSqlRawAsync(
-                    FormattableString.Invariant($"PRAGMA analysis_limit={analysisLimit.Value}"),
+                    FormattableString.Invariant($"PRAGMA analysis_limit={previousLimit.Value}"),
                     CancellationToken.None).ConfigureAwait(false);
             }
+        }
+    }
+
+    private static async Task<long?> ReadPragmaValueAsync(JellyfinDbContext context, string pragma, CancellationToken cancellationToken)
+    {
+        var command = context.Database.GetDbConnection().CreateCommand();
+        await using (command.ConfigureAwait(false))
+        {
+#pragma warning disable CA2100 // The pragma name is a compile-time constant.
+            command.CommandText = "PRAGMA " + pragma;
+#pragma warning restore CA2100
+            return await ReadPragmaValueAsync(command, cancellationToken).ConfigureAwait(false);
         }
     }
 

@@ -293,8 +293,10 @@ public class ScheduledTaskWorker : IScheduledTaskWorker
         }
         finally
         {
+            // No forced GC.Collect() here: it was a blocking gen2 collection after every task, including
+            // the ones that did nothing, and it stalled streaming threads. The GC reclaims the task's
+            // garbage on its own schedule.
             _currentTask = null;
-            GC.Collect();
         }
     }
 

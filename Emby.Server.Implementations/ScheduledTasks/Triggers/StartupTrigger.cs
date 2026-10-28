@@ -10,7 +10,9 @@ namespace Emby.Server.Implementations.ScheduledTasks.Triggers;
 /// </summary>
 public sealed class StartupTrigger : ITaskTrigger
 {
-    private const int DelayMs = 3000;
+    // Give migrations, the first client connections and the library root enumeration a head start before
+    // startup tasks (plugin update checks over HTTP, transcode folder cleanup) compete with them.
+    private const int DelayMs = 60_000;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StartupTrigger"/> class.

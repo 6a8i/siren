@@ -39,7 +39,7 @@ public class StartupLogger<TCategory> : StartupLogger, IStartupLogger<TCategory>
 
         if (Topic is null)
         {
-            SetupServer.LogQueue?.Enqueue(startupEntry);
+            SetupServer.EnqueueLog(startupEntry);
         }
         else
         {

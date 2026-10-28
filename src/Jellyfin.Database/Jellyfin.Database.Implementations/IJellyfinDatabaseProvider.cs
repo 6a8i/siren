@@ -45,6 +45,15 @@ public interface IJellyfinDatabaseProvider
     Task RunScheduledOptimisation(CancellationToken cancellationToken);
 
     /// <summary>
+    /// If supported this should refresh the query planner statistics after migrations changed the schema or the
+    /// data. It runs on the startup path, so it should not reclaim space: that is left to
+    /// <see cref="RunScheduledOptimisation(CancellationToken)"/>.
+    /// </summary>
+    /// <param name="cancellationToken">The token to abort the operation.</param>
+    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+    Task RunPostMigrationOptimisation(CancellationToken cancellationToken) => RunScheduledOptimisation(cancellationToken);
+
+    /// <summary>
     /// If supported this should refresh the query planner statistics, e.g. after a library scan changed the data.
     /// Unlike <see cref="RunScheduledOptimisation(CancellationToken)"/> it should not reclaim space, so that it stays
     /// cheap enough to run after every scan.

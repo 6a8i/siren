@@ -43,8 +43,10 @@ public sealed class IntervalTrigger : ITaskTrigger, IDisposable
 
         if (lastResult is null)
         {
-            // Task has never been completed before
-            triggerDate = now.AddHours(1);
+            // Task has never been completed before. Spread the first runs over the following hour with a
+            // per-task offset, otherwise every interval task on a fresh install (library scan, database
+            // optimization, media segment extraction, loudness scan, ...) fires at the same minute.
+            triggerDate = now.AddHours(1).AddMinutes(GetFirstRunJitterMinutes(taskName));
         }
         else
         {
@@ -66,6 +68,21 @@ public sealed class IntervalTrigger : ITaskTrigger, IDisposable
     public void Stop()
     {
         DisposeTimer();
+    }
+
+    /// <summary>
+    /// Deterministic 0-59 minute offset derived from the task name, so the same task always lands on the same
+    /// minute and different tasks spread out. string.GetHashCode is randomized per process, hence the manual hash.
+    /// </summary>
+    private static int GetFirstRunJitterMinutes(string taskName)
+    {
+        var hash = 17;
+        foreach (var c in taskName)
+        {
+            hash = unchecked((hash * 31) + c);
+        }
+
+        return (int)((uint)hash % 60);
     }
 
     /// <summary>

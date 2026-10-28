@@ -71,7 +71,32 @@ public sealed class SetupServer : IDisposable
         _configurationManager.RegisterConfiguration<NetworkConfigurationFactory>();
     }
 
+    /// <summary>
+    /// Upper bound on the entries kept for the startup page. The queue also receives every Error/Critical log
+    /// event for the lifetime of the process (see <see cref="CatchingSetupServerLogger"/>), so without a bound it
+    /// grows with uptime.
+    /// </summary>
+    private const int MaxLogQueueEntries = 500;
+
     internal static ConcurrentQueue<StartupLogTopic>? LogQueue { get; set; } = new();
+
+    /// <summary>
+    /// Adds an entry to <see cref="LogQueue"/>, dropping the oldest entries past <see cref="MaxLogQueueEntries"/>.
+    /// </summary>
+    /// <param name="entry">The entry to add.</param>
+    internal static void EnqueueLog(StartupLogTopic entry)
+    {
+        var queue = LogQueue;
+        if (queue is null)
+        {
+            return;
+        }
+
+        queue.Enqueue(entry);
+        while (queue.Count > MaxLogQueueEntries && queue.TryDequeue(out _))
+        {
+        }
+    }
 
     /// <summary>
     /// Gets a generic, non-identifying summary of what startup is currently doing. This is shown in the
@@ -333,7 +358,7 @@ public sealed class SetupServer : IDisposable
                 return;
             }
 
-            LogQueue?.Enqueue(new()
+            EnqueueLog(new()
             {
                 LogLevel = logLevel,
                 Content = formatter(state, exception),

@@ -361,7 +361,7 @@ namespace Jellyfin.Server
             {
                 // Deliberately untimed: incomplete statistics are worse than a slow start.
                 var databaseProvider = serviceProvider.GetRequiredService<IJellyfinDatabaseProvider>();
-                await databaseProvider.RunScheduledOptimisation(CancellationToken.None).ConfigureAwait(false);
+                await databaseProvider.RunPostMigrationOptimisation(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

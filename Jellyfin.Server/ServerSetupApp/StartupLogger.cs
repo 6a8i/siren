@@ -89,7 +89,7 @@ public class StartupLogger : IStartupLogger
 
         if (Topic is null)
         {
-            SetupServer.LogQueue?.Enqueue(startupEntry);
+            SetupServer.EnqueueLog(startupEntry);
         }
         else
         {
@@ -130,7 +130,7 @@ public class StartupLogger : IStartupLogger
 
         if (Topic is null)
         {
-            SetupServer.LogQueue?.Enqueue(startupEntry);
+            SetupServer.EnqueueLog(startupEntry);
         }
         else
         {
