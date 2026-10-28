@@ -1,10 +1,12 @@
+using System;
 using System.IO;
 using System.Threading.Tasks;
 using Jellyfin.Server.Implementations.SystemBackupService;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.SystemBackupService;
-using Microsoft.AspNetCore.Authentication.OAuth.Claims;
+using MediaBrowser.Model.Activity;
+using MediaBrowser.Model.Globalization;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -20,16 +22,26 @@ public class BackupController : BaseJellyfinApiController
 {
     private readonly IBackupService _backupService;
     private readonly IApplicationPaths _applicationPaths;
+    private readonly IActivityManager _activityManager;
+    private readonly ILocalizationManager _localization;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BackupController"/> class.
     /// </summary>
     /// <param name="backupService">Instance of the <see cref="IBackupService"/> interface.</param>
     /// <param name="applicationPaths">Instance of the <see cref="IApplicationPaths"/> interface.</param>
-    public BackupController(IBackupService backupService, IApplicationPaths applicationPaths)
+    /// <param name="activityManager">Instance of the <see cref="IActivityManager"/> interface.</param>
+    /// <param name="localization">Instance of the <see cref="ILocalizationManager"/> interface.</param>
+    public BackupController(
+        IBackupService backupService,
+        IApplicationPaths applicationPaths,
+        IActivityManager activityManager,
+        ILocalizationManager localization)
     {
         _backupService = backupService;
         _applicationPaths = applicationPaths;
+        _activityManager = activityManager;
+        _localization = localization;
     }
 
     /// <summary>
@@ -44,7 +56,20 @@ public class BackupController : BaseJellyfinApiController
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<BackupManifestDto>> CreateBackup([FromBody] BackupOptionsDto backupOptions)
     {
-        return Ok(await _backupService.CreateBackupAsync(backupOptions ?? new()).ConfigureAwait(false));
+        BackupManifestDto manifest;
+        try
+        {
+            manifest = await _backupService.CreateBackupAsync(backupOptions ?? new()).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Same trace as the scheduled task, so the activity log tells the whole story of the backups.
+            await BackupActivityLog.LogFailedAsync(_activityManager, _localization, ex).ConfigureAwait(false);
+            throw;
+        }
+
+        await BackupActivityLog.LogCreatedAsync(_activityManager, _localization, manifest.Path).ConfigureAwait(false);
+        return Ok(manifest);
     }
 
     /// <summary>

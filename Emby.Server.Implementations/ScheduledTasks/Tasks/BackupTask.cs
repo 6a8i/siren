@@ -10,6 +10,7 @@ using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.SystemBackupService;
+using MediaBrowser.Model.Activity;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
@@ -39,6 +40,7 @@ public class BackupTask : IScheduledTask, IConfigurableScheduledTask
     private readonly IServerApplicationHost _applicationHost;
     private readonly IApplicationPaths _applicationPaths;
     private readonly ILibraryManager _libraryManager;
+    private readonly IActivityManager _activityManager;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BackupTask"/> class.
@@ -49,13 +51,15 @@ public class BackupTask : IScheduledTask, IConfigurableScheduledTask
     /// <param name="applicationHost">Instance of the <see cref="IServerApplicationHost"/> interface.</param>
     /// <param name="applicationPaths">Instance of the <see cref="IApplicationPaths"/> interface.</param>
     /// <param name="libraryManager">Instance of the <see cref="ILibraryManager"/> interface.</param>
+    /// <param name="activityManager">Instance of the <see cref="IActivityManager"/> interface.</param>
     public BackupTask(
         ILogger<BackupTask> logger,
         ILocalizationManager localization,
         IBackupService backupService,
         IServerApplicationHost applicationHost,
         IApplicationPaths applicationPaths,
-        ILibraryManager libraryManager)
+        ILibraryManager libraryManager,
+        IActivityManager activityManager)
     {
         _logger = logger;
         _localization = localization;
@@ -63,6 +67,7 @@ public class BackupTask : IScheduledTask, IConfigurableScheduledTask
         _applicationHost = applicationHost;
         _applicationPaths = applicationPaths;
         _libraryManager = libraryManager;
+        _activityManager = activityManager;
     }
 
     /// <inheritdoc />
@@ -123,30 +128,47 @@ public class BackupTask : IScheduledTask, IConfigurableScheduledTask
 
         progress.Report(0);
 
-        // Database and configuration only: that is what cannot be rebuilt. Metadata, trickplay and subtitles
-        // can be regenerated or downloaded again and would turn a few MB into many GB a week.
-        var manifest = await _backupService.CreateBackupAsync(new BackupOptionsDto
+        string archivePath;
+        try
         {
-            Database = true,
-            Metadata = false,
-            Trickplay = false,
-            Subtitles = false
-        }).ConfigureAwait(false);
-        progress.Report(80);
+            // Database and configuration only: that is what cannot be rebuilt. Metadata, trickplay and subtitles
+            // can be regenerated or downloaded again and would turn a few MB into many GB a week.
+            var manifest = await _backupService.CreateBackupAsync(new BackupOptionsDto
+            {
+                Database = true,
+                Metadata = false,
+                Trickplay = false,
+                Subtitles = false
+            }).ConfigureAwait(false);
+            progress.Report(80);
 
-        MarkAsScheduled(manifest);
+            archivePath = MarkAsScheduled(manifest);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The task framework records the failure too, but only the activity log is what an administrator
+            // sees in the dashboard without opening the task.
+            await BackupActivityLog.LogFailedAsync(_activityManager, _localization, ex).ConfigureAwait(false);
+            throw;
+        }
+
+        await BackupActivityLog.LogCreatedAsync(_activityManager, _localization, archivePath).ConfigureAwait(false);
         progress.Report(90);
 
         await DeleteOldScheduledBackupsAsync(cancellationToken).ConfigureAwait(false);
         progress.Report(100);
     }
 
-    private void MarkAsScheduled(BackupManifestDto manifest)
+    /// <summary>
+    /// Renames the archive with the scheduled prefix.
+    /// </summary>
+    /// <returns>The path of the archive after the rename, or its original path when the rename failed.</returns>
+    private string MarkAsScheduled(BackupManifestDto manifest)
     {
         var directory = Path.GetDirectoryName(manifest.Path);
         if (string.IsNullOrEmpty(directory))
         {
-            return;
+            return manifest.Path;
         }
 
         // Same timestamp the service put in the original name, so the two names line up.
@@ -158,11 +180,13 @@ public class BackupTask : IScheduledTask, IConfigurableScheduledTask
         {
             File.Move(manifest.Path, scheduledPath);
             _logger.LogInformation("Scheduled backup written to {Path}", scheduledPath);
+            return scheduledPath;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // The archive matters more than its name; it just stays out of the retention, like a manual backup.
             _logger.LogWarning(ex, "Could not rename {Path} to {ScheduledPath}, the archive keeps its original name", manifest.Path, scheduledPath);
+            return manifest.Path;
         }
     }
 

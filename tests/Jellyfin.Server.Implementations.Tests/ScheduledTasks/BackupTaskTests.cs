@@ -1,16 +1,20 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Emby.Server.Implementations.ScheduledTasks.Tasks;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Server.Implementations.SystemBackupService;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.SystemBackupService;
+using MediaBrowser.Model.Activity;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.Tasks;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
@@ -26,6 +30,7 @@ public sealed class BackupTaskTests : IDisposable
     private readonly Mock<IBackupService> _backupService = new();
     private readonly Mock<IServerApplicationHost> _applicationHost = new();
     private readonly Mock<ILibraryManager> _libraryManager = new();
+    private readonly List<ActivityLog> _activityLog = [];
 
     public BackupTaskTests()
     {
@@ -134,6 +139,44 @@ public sealed class BackupTaskTests : IDisposable
         progress.Verify(p => p.Report(100), Times.Once);
     }
 
+    [Fact]
+    public async Task Execute_Success_LogsBackupCreatedWithTheScheduledName()
+    {
+        await CreateTask().ExecuteAsync(new Progress<double>(), TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(_activityLog);
+        Assert.Equal(BackupActivityLog.CreatedType, entry.Type);
+        Assert.Equal(LogLevel.Information, entry.LogSeverity);
+        Assert.Contains(BackupTask.ScheduledBackupPrefix + "20260201030000.zip", entry.Name, StringComparison.Ordinal);
+        Assert.Contains("3 B", entry.Name, StringComparison.Ordinal);
+        Assert.Equal(Path.Combine(_backupPath, BackupTask.ScheduledBackupPrefix + "20260201030000.zip"), entry.ShortOverview);
+    }
+
+    [Fact]
+    public async Task Execute_ServiceThrows_LogsBackupFailedAndRethrows()
+    {
+        _backupService
+            .Setup(s => s.CreateBackupAsync(It.IsAny<BackupOptionsDto>()))
+            .ThrowsAsync(new InvalidOperationException("disk full"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => CreateTask().ExecuteAsync(new Progress<double>(), TestContext.Current.CancellationToken));
+
+        var entry = Assert.Single(_activityLog);
+        Assert.Equal(BackupActivityLog.FailedType, entry.Type);
+        Assert.Equal(LogLevel.Error, entry.LogSeverity);
+        Assert.Contains("disk full", entry.Name, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Execute_Skipped_LogsNothing()
+    {
+        _libraryManager.SetupGet(l => l.IsScanRunning).Returns(true);
+
+        await CreateTask().ExecuteAsync(new Progress<double>(), TestContext.Current.CancellationToken);
+
+        Assert.Empty(_activityLog);
+    }
+
     private static string ScheduledName(int day)
         => string.Create(CultureInfo.InvariantCulture, $"{BackupTask.ScheduledBackupPrefix}202601{day:00}030000.zip");
 
@@ -168,6 +211,17 @@ public sealed class BackupTaskTests : IDisposable
 
         var localization = new Mock<ILocalizationManager>();
         localization.Setup(l => l.GetLocalizedString(It.IsAny<string>())).Returns((string key) => key);
+        localization.Setup(l => l.GetServerLocalizedString("BackupCreatedWithNameAndSize")).Returns("Backup {0} ({1}) has been created");
+        localization.Setup(l => l.GetServerLocalizedString("BackupFailedWithMessage")).Returns("Backup failed: {0}");
+
+        var activityManager = new Mock<IActivityManager>();
+        activityManager
+            .Setup(a => a.CreateAsync(It.IsAny<ActivityLog>()))
+            .Returns((ActivityLog entry) =>
+            {
+                _activityLog.Add(entry);
+                return Task.CompletedTask;
+            });
 
         return new BackupTask(
             NullLogger<BackupTask>.Instance,
@@ -175,6 +229,7 @@ public sealed class BackupTaskTests : IDisposable
             _backupService.Object,
             _applicationHost.Object,
             applicationPaths.Object,
-            _libraryManager.Object);
+            _libraryManager.Object,
+            activityManager.Object);
     }
 }

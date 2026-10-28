@@ -2,6 +2,8 @@
     "AppDeviceValues": "App: {0}, Dispositivo: {1}",
     "Artists": "Artistas",
     "AuthenticationSucceededWithUserName": "{0} autenticado com sucesso",
+    "BackupCreatedWithNameAndSize": "O backup {0} ({1}) foi criado",
+    "BackupFailedWithMessage": "O backup falhou: {0}",
     "Books": "Livros",
     "ChapterNameValue": "Capítulo {0}",
     "Collections": "Coleções",

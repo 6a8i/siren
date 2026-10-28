@@ -120,6 +120,25 @@ public sealed class BackupServiceTests : IDisposable
         Assert.Equal(validItemId, singleRow.GetProperty("ItemId").GetGuid());
     }
 
+    [Fact]
+    public async Task EnumerateBackups_ListsArchivesRenamedWithTheScheduledPrefix()
+    {
+        var backupService = CreateBackupService();
+        var manifest = await backupService.CreateBackupAsync(new BackupOptionsDto()).ConfigureAwait(true);
+
+        // What the scheduled task does with the archive the service hands it.
+        var scheduledPath = Path.Combine(_backupPath, "jellyfin-backup-scheduled-20260201030000.zip");
+        File.Move(manifest.Path, scheduledPath);
+
+        var listed = Assert.Single(await backupService.EnumerateBackups().ConfigureAwait(true));
+        Assert.Equal(scheduledPath, listed.Path);
+        Assert.Equal(manifest.DateCreated, listed.DateCreated);
+
+        var scheduledManifest = await backupService.GetBackupManifest(scheduledPath).ConfigureAwait(true);
+        Assert.NotNull(scheduledManifest);
+        Assert.Equal(scheduledPath, scheduledManifest.Path);
+    }
+
     private BackupService CreateBackupService()
     {
         var factory = new Mock<IDbContextFactory<JellyfinDbContext>>();

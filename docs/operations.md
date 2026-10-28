@@ -168,9 +168,38 @@ aos **domingos às 03:00** e pode ser reagendada ou disparada no painel como qua
   banco nesse estado) ou se uma restauração está agendada para o próximo boot; nos dois casos a
   tarefa registra o motivo e espera o próximo gatilho. Como o serviço, exige 5 GiB livres na
   pasta de backups.
-- **Restaurar:** `POST /Backup/Restore` com `ArchiveFileName` igual ao nome do arquivo (o prefixo
-  não muda nada) ou `--restore-archive <caminho>` na linha de comando. O servidor reinicia e
-  aplica o arquivo antes de subir.
+- **Registro de atividades:** cada backup deixa uma entrada, venha da tarefa ou de
+  `POST /Backup/Create`: `BackupCreated` (`Backup jellyfin-backup-scheduled-20260201030000.zip
+  (12.4 MiB) has been created`, com o caminho completo em `ShortOverview`) ou `BackupFailed`
+  (severidade `Error`, `Backup failed: <mensagem da exceção>`, com a exceção inteira em
+  `Overview`). A tarefa também aparece como falha no painel de tarefas, mas é o registro de
+  atividades que fica visível na página inicial do painel. Uma execução pulada (scan em andamento,
+  restauração pendente) não gera entrada. Textos em `BackupCreatedWithNameAndSize` e
+  `BackupFailedWithMessage` (`Localization/Core`). Implementação compartilhada em
+  `MediaBrowser.Controller/SystemBackupService/BackupActivityLog.cs`.
+
+### Restaurar um backup
+
+1. `GET /Backup` lista todo `.zip` da pasta de backups que tem um `manifest.json` válido, com data
+   de criação, versão do servidor e opções; os arquivos agendados aparecem junto dos manuais, só o
+   nome muda. `GET /Backup/Manifest?path=<nome>` mostra um só.
+2. `POST /Backup/Restore` com corpo `{ "ArchiveFileName": "jellyfin-backup-scheduled-20260201030000.zip" }`.
+   Só o nome do arquivo conta: qualquer diretório no valor é descartado e o arquivo é procurado na
+   pasta de backups (`404` se não está lá). A resposta é `204`; meio segundo depois o servidor para
+   com a restauração marcada e reinicia.
+3. No boot seguinte, antes de qualquer migração, o servidor lê o arquivo, confere que o manifesto
+   existe e que a versão do servidor que o gerou não é mais nova que a atual, apaga o banco e a
+   configuração que ele cobre e os substitui pelo conteúdo do arquivo, e reinicia mais uma vez para
+   subir normal. Linha de log: `Begin restoring system to <caminho>`.
+4. Sem servidor no ar, o mesmo pode ser feito pela linha de comando:
+   `jellyfin --restore-archive <caminho completo do zip>`.
+
+Um arquivo que não é um backup (sem `manifest.json`) não aparece na listagem e, se for passado para
+a restauração, faz o boot falhar com `does not appear to be a Jellyfin backup` e o processo
+encerra; iniciado de novo (pelo serviço do sistema ou a mão) ele sobe normal, porque a marca de
+restauração vive só em memória. O painel web
+tem uma página de backups que lista e cria arquivos; para restaurar por ela a página precisa
+enviar o `ArchiveFileName` que a listagem devolve, prefixo incluído, exatamente como a API.
 
 ## Carga de plugins
 
