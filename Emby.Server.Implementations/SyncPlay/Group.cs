@@ -150,6 +150,12 @@ namespace Emby.Server.Implementations.SyncPlay
         public string GroupName { get; private set; }
 
         /// <summary>
+        /// Gets the family of the user that created the group, or <c>null</c> when they belong to none.
+        /// A group stays inside its family: members of other families never see it.
+        /// </summary>
+        public Guid? FamilyId { get; private set; }
+
+        /// <summary>
         /// Gets the group identifier.
         /// </summary>
         /// <value>The group identifier.</value>
@@ -290,6 +296,7 @@ namespace Emby.Server.Implementations.SyncPlay
         public void CreateGroup(SessionInfo session, NewGroupRequest request, CancellationToken cancellationToken)
         {
             GroupName = request.GroupName;
+            FamilyId = session.UserId.Equals(Guid.Empty) ? null : _userManager.GetUserById(session.UserId)?.FamilyId;
             AddSession(session);
 
             var sessionIsPlayingAnItem = session.FullNowPlayingItem is not null;
@@ -396,6 +403,17 @@ namespace Emby.Server.Implementations.SyncPlay
         {
             var participants = _participants.Values.Select(session => session.UserName).Distinct().ToList();
             return new GroupInfoDto(GroupId, GroupName, _state.Type, participants, DateTime.UtcNow);
+        }
+
+        /// <summary>
+        /// Checks whether a user may see this group: a family's groups are visible to that family only,
+        /// and groups from users outside any family only to users outside any family.
+        /// </summary>
+        /// <param name="user">The user.</param>
+        /// <returns><c>true</c> if the user may see the group; <c>false</c> otherwise.</returns>
+        public bool IsVisibleTo(User user)
+        {
+            return user is not null && Nullable.Equals(FamilyId, user.FamilyId);
         }
 
         /// <summary>

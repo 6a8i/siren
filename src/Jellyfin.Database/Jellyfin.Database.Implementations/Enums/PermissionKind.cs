@@ -124,4 +124,9 @@ public enum PermissionKind
     /// Whether the user can edit lyrics.
     /// </summary>
     EnableLyricManagement = 23,
+
+    /// <summary>
+    /// Whether the user manages the profiles of their own family.
+    /// </summary>
+    IsFamilyAdministrator = 24,
 }

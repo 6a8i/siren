@@ -46,6 +46,11 @@ namespace MediaBrowser.Model.Dto
         public Guid Id { get; set; }
 
         /// <summary>
+        /// Gets or sets the id of the family the user belongs to, or <c>null</c> for none.
+        /// </summary>
+        public Guid? FamilyId { get; set; }
+
+        /// <summary>
         /// Gets or sets the primary image tag.
         /// </summary>
         /// <value>The primary image tag.</value>

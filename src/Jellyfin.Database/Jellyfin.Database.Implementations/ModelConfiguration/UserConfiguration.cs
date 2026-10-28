@@ -48,6 +48,15 @@ namespace Jellyfin.Database.Implementations.ModelConfiguration
                 .OnDelete(DeleteBehavior.Cascade);
 
             builder
+                .HasOne<Family>()
+                .WithMany()
+                .HasForeignKey(user => user.FamilyId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            builder
+                .HasIndex(entity => entity.FamilyId);
+
+            builder
                 .HasIndex(entity => entity.Username)
                 .IsUnique();
 

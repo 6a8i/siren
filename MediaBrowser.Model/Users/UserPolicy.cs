@@ -74,6 +74,11 @@ namespace MediaBrowser.Model.Users
         public bool IsAdministrator { get; set; }
 
         /// <summary>
+        /// Gets or sets a value indicating whether this user manages the profiles of their own family.
+        /// </summary>
+        public bool IsFamilyAdministrator { get; set; }
+
+        /// <summary>
         /// Gets or sets a value indicating whether this instance is hidden.
         /// </summary>
         /// <value><c>true</c> if this instance is hidden; otherwise, <c>false</c>.</value>

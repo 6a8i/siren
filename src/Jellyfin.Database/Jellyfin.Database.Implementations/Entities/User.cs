@@ -280,6 +280,12 @@ namespace Jellyfin.Database.Implementations.Entities
         public long InternalId { get; set; }
 
         /// <summary>
+        /// Gets or sets the id of the family this user belongs to, or <c>null</c> for a user outside any
+        /// family. Server administrators are always outside.
+        /// </summary>
+        public Guid? FamilyId { get; set; }
+
+        /// <summary>
         /// Gets or sets the user's profile image. Can be <c>null</c>.
         /// </summary>
         // [ForeignKey("UserId")]

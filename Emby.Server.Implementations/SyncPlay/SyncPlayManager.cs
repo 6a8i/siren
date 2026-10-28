@@ -189,6 +189,15 @@ namespace Emby.Server.Implementations.SyncPlay
                 // Group lock required to let other requests end first.
                 lock (group)
                 {
+                    if (!group.IsVisibleTo(user))
+                    {
+                        _logger.LogWarning("Session {SessionId} tried to join group {GroupId} of another family.", session.Id, group.GroupId.ToString());
+
+                        var error = new SyncPlayGroupDoesNotExistUpdate(Guid.Empty, string.Empty);
+                        _sessionManager.SendSyncPlayGroupUpdate(session.Id, error, CancellationToken.None);
+                        return;
+                    }
+
                     if (!group.HasAccessToPlayQueue(user))
                     {
                         _logger.LogWarning("Session {SessionId} tried to join group {GroupId} but does not have access to some content of the playing queue.", session.Id, group.GroupId.ToString());
@@ -300,7 +309,7 @@ namespace Emby.Server.Implementations.SyncPlay
                     // Locking required as group is not thread-safe.
                     lock (group)
                     {
-                        if (group.HasAccessToPlayQueue(user))
+                        if (group.IsVisibleTo(user) && group.HasAccessToPlayQueue(user))
                         {
                             list.Add(group.GetInfo());
                         }
@@ -325,7 +334,7 @@ namespace Emby.Server.Implementations.SyncPlay
                     // Locking required as group is not thread-safe.
                     lock (group)
                     {
-                        if (group.GroupId.Equals(groupId) && group.HasAccessToPlayQueue(user))
+                        if (group.GroupId.Equals(groupId) && group.IsVisibleTo(user) && group.HasAccessToPlayQueue(user))
                         {
                             return group.GetInfo();
                         }

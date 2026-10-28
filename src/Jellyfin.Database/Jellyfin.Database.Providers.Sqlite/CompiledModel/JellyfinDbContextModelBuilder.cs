@@ -11,7 +11,7 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
     public partial class JellyfinDbContextModel
     {
         private JellyfinDbContextModel()
-            : base(skipDetectChanges: false, modelId: new Guid("a4b7b9bc-cbdc-4295-acbc-91b60f7f04ce"), entityTypeCount: 31)
+            : base(skipDetectChanges: false, modelId: new Guid("a2e2c5f2-dbdd-416c-a43a-16fafc680c9b"), entityTypeCount: 32)
         {
         }
 
@@ -29,6 +29,7 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
             var chapter = ChapterEntityType.Create(this);
             var customItemDisplayPreferences = CustomItemDisplayPreferencesEntityType.Create(this);
             var displayPreferences = DisplayPreferencesEntityType.Create(this);
+            var family = FamilyEntityType.Create(this);
             var homeSection = HomeSectionEntityType.Create(this);
             var imageInfo = ImageInfoEntityType.Create(this);
             var itemDisplayPreferences = ItemDisplayPreferencesEntityType.Create(this);
@@ -75,6 +76,7 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
             PermissionEntityType.CreateForeignKey1(permission, user);
             PreferenceEntityType.CreateForeignKey1(preference, user);
             DeviceEntityType.CreateForeignKey1(device, user);
+            UserEntityType.CreateForeignKey1(user, family);
             UserDataEntityType.CreateForeignKey1(userData, baseItemEntity);
             UserDataEntityType.CreateForeignKey2(userData, user);
 
@@ -90,6 +92,7 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
             ChapterEntityType.CreateAnnotations(chapter);
             CustomItemDisplayPreferencesEntityType.CreateAnnotations(customItemDisplayPreferences);
             DisplayPreferencesEntityType.CreateAnnotations(displayPreferences);
+            FamilyEntityType.CreateAnnotations(family);
             HomeSectionEntityType.CreateAnnotations(homeSection);
             ImageInfoEntityType.CreateAnnotations(imageInfo);
             ItemDisplayPreferencesEntityType.CreateAnnotations(itemDisplayPreferences);

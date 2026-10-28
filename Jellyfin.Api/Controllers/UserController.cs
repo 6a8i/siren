@@ -8,6 +8,8 @@ using Jellyfin.Api.Extensions;
 using Jellyfin.Api.Helpers;
 using Jellyfin.Api.Models.UserDtos;
 using Jellyfin.Data;
+using Jellyfin.Data.Queries;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions;
 using MediaBrowser.Common.Api;
@@ -82,7 +84,8 @@ public class UserController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Gets a list of users.
+    /// Gets a list of users. A user that is not a server administrator only gets their own family
+    /// (or only themselves, outside a family).
     /// </summary>
     /// <param name="isHidden">Optional filter by IsHidden=true or false.</param>
     /// <param name="isDisabled">Optional filter by IsDisabled=true or false.</param>
@@ -95,26 +98,28 @@ public class UserController : BaseJellyfinApiController
         [FromQuery] bool? isHidden,
         [FromQuery] bool? isDisabled)
     {
-        var users = Get(isHidden, isDisabled, false, false);
+        var users = Get(isHidden, isDisabled, false, false, GetCallerScope());
         return Ok(users);
     }
 
     /// <summary>
-    /// Gets a list of publicly visible users for display on a login screen.
+    /// Gets a list of publicly visible users for display on a login screen. Family profiles are
+    /// only listed on a device where one of that family's profiles is signed in.
     /// </summary>
     /// <response code="200">Public users returned.</response>
     /// <returns>An <see cref="IEnumerable{UserDto}"/> containing the public users.</returns>
     [HttpGet("Public")]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public ActionResult<IEnumerable<UserDto>> GetPublicUsers()
+    public async Task<ActionResult<IEnumerable<UserDto>>> GetPublicUsers()
     {
         // If the startup wizard hasn't been completed then just return all users
         if (!_config.Configuration.IsStartupWizardCompleted)
         {
-            return Ok(Get(false, false, false, false));
+            return Ok(Get(false, false, false, false, null));
         }
 
-        return Ok(Get(false, false, true, true));
+        var knownFamilies = await GetFamiliesKnownToDevice().ConfigureAwait(false);
+        return Ok(Get(false, false, true, true, user => user.FamilyId is null || knownFamilies.Contains(user.FamilyId.Value)));
     }
 
     /// <summary>
@@ -135,6 +140,11 @@ public class UserController : BaseJellyfinApiController
         if (user is null)
         {
             return NotFound("User not found");
+        }
+
+        if (GetCallerScope() is { } scope && !scope(user))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, "Users outside your family are not visible.");
         }
 
         var result = _userManager.GetUserDto(user, HttpContext.GetNormalizedRemoteIP().ToString());
@@ -424,6 +434,11 @@ public class UserController : BaseJellyfinApiController
             return NotFound();
         }
 
+        if (newPolicy.IsAdministrator && user.FamilyId is not null)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, "A family member cannot be a server administrator.");
+        }
+
         // If removing admin access
         if (!newPolicy.IsAdministrator && user.HasPermission(PermissionKind.IsAdministrator))
         {
@@ -599,9 +614,59 @@ public class UserController : BaseJellyfinApiController
         return _userManager.GetUserDto(user);
     }
 
-    private IEnumerable<UserDto> Get(bool? isHidden, bool? isDisabled, bool filterByDevice, bool filterByNetwork)
+    /// <summary>
+    /// What the caller may see: a server administrator (or API key) sees everyone, a family member
+    /// sees their family, anyone else sees only themselves.
+    /// </summary>
+    private Func<User, bool>? GetCallerScope()
+    {
+        if (User.IsInRole(UserRoles.Administrator))
+        {
+            return null;
+        }
+
+        var callerId = User.GetUserId();
+        var caller = callerId.IsEmpty() ? null : _userManager.GetUserById(callerId);
+        if (caller?.FamilyId is { } familyId)
+        {
+            return user => user.FamilyId.Equals(familyId);
+        }
+
+        return user => user.Id.Equals(callerId);
+    }
+
+    /// <summary>
+    /// The families with a profile signed in on the requesting device, so a shared screen can list
+    /// that family's profiles at login without showing them to anyone else.
+    /// </summary>
+    private async Task<HashSet<Guid>> GetFamiliesKnownToDevice()
+    {
+        var result = new HashSet<Guid>();
+        var auth = await _authContext.GetAuthorizationInfo(Request).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(auth.DeviceId))
+        {
+            return result;
+        }
+
+        foreach (var device in _deviceManager.GetDevices(new DeviceQuery { DeviceId = auth.DeviceId }).Items)
+        {
+            if (!device.UserId.IsEmpty() && _userManager.GetUserById(device.UserId)?.FamilyId is { } familyId)
+            {
+                result.Add(familyId);
+            }
+        }
+
+        return result;
+    }
+
+    private IEnumerable<UserDto> Get(bool? isHidden, bool? isDisabled, bool filterByDevice, bool filterByNetwork, Func<User, bool>? scope)
     {
         var users = _userManager.GetUsers();
+
+        if (scope is not null)
+        {
+            users = users.Where(scope);
+        }
 
         if (isDisabled.HasValue)
         {

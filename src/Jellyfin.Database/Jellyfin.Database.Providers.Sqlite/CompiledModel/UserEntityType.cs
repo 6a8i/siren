@@ -3,6 +3,7 @@ using System;
 using System.Reflection;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
@@ -21,9 +22,10 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
                 "Jellyfin.Database.Implementations.Entities.User",
                 typeof(User),
                 baseEntityType,
-                propertyCount: 32,
+                propertyCount: 33,
                 navigationCount: 6,
-                unnamedIndexCount: 2,
+                foreignKeyCount: 1,
+                unnamedIndexCount: 3,
                 keyCount: 1);
 
             var id = runtimeEntityType.AddProperty(
@@ -99,6 +101,13 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
                 propertyInfo: typeof(User).GetProperty("EnableUserPreferenceAccess", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
                 fieldInfo: typeof(User).GetField("<EnableUserPreferenceAccess>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
                 sentinel: false);
+
+            var familyId = runtimeEntityType.AddProperty(
+                "FamilyId",
+                typeof(Guid?),
+                propertyInfo: typeof(User).GetProperty("FamilyId", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                fieldInfo: typeof(User).GetField("<FamilyId>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                nullable: true);
 
             var hidePlayedInLatest = runtimeEntityType.AddProperty(
                 "HidePlayedInLatest",
@@ -268,14 +277,27 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
             runtimeEntityType.SetPrimaryKey(key);
 
             var index = runtimeEntityType.AddIndex(
+                new[] { familyId });
+
+            var index0 = runtimeEntityType.AddIndex(
                 new[] { normalizedUsername },
                 unique: true);
 
-            var index0 = runtimeEntityType.AddIndex(
+            var index1 = runtimeEntityType.AddIndex(
                 new[] { username },
                 unique: true);
 
             return runtimeEntityType;
+        }
+
+        public static RuntimeForeignKey CreateForeignKey1(RuntimeEntityType declaringEntityType, RuntimeEntityType principalEntityType)
+        {
+            var runtimeForeignKey = declaringEntityType.AddForeignKey(new[] { declaringEntityType.FindProperty("FamilyId") },
+                principalEntityType.FindKey(new[] { principalEntityType.FindProperty("Id") }),
+                principalEntityType,
+                deleteBehavior: DeleteBehavior.SetNull);
+
+            return runtimeForeignKey;
         }
 
         public static void CreateAnnotations(RuntimeEntityType runtimeEntityType)
