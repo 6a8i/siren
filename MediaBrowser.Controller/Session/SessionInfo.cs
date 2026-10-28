@@ -19,7 +19,6 @@ namespace MediaBrowser.Controller.Session
     /// </summary>
     public sealed class SessionInfo : IAsyncDisposable
     {
-        // 1 second
         /// <summary>
         /// How often the server advances the position of a playing session on its own, between the client's
         /// own progress reports. Every tick is a full OnPlaybackProgress (session lookup, user load, event

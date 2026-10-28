@@ -34,6 +34,13 @@ namespace Jellyfin.Server.ServerSetupApp;
 /// </summary>
 public sealed class SetupServer : IDisposable
 {
+    /// <summary>
+    /// Upper bound on the entries kept for the startup page. The queue also receives every Error/Critical log
+    /// event for the lifetime of the process (see <see cref="CatchingSetupServerLogger"/>), so without a bound it
+    /// grows with uptime.
+    /// </summary>
+    private const int MaxLogQueueEntries = 500;
+
     private readonly Func<INetworkManager?> _networkManagerFactory;
     private readonly IApplicationPaths _applicationPaths;
     private readonly Func<IServerApplicationHost?> _serverFactory;
@@ -71,14 +78,18 @@ public sealed class SetupServer : IDisposable
         _configurationManager.RegisterConfiguration<NetworkConfigurationFactory>();
     }
 
-    /// <summary>
-    /// Upper bound on the entries kept for the startup page. The queue also receives every Error/Critical log
-    /// event for the lifetime of the process (see <see cref="CatchingSetupServerLogger"/>), so without a bound it
-    /// grows with uptime.
-    /// </summary>
-    private const int MaxLogQueueEntries = 500;
-
     internal static ConcurrentQueue<StartupLogTopic>? LogQueue { get; set; } = new();
+
+    /// <summary>
+    /// Gets a generic, non-identifying summary of what startup is currently doing. This is shown in the
+    /// always-visible header of the startup UI to unauthenticated clients, so it never contains server specific details.
+    /// </summary>
+    internal static string CurrentActivity => _currentActivity;
+
+    /// <summary>
+    /// Gets a value indicating whether Startup server is currently running.
+    /// </summary>
+    public bool IsAlive { get; internal set; }
 
     /// <summary>
     /// Adds an entry to <see cref="LogQueue"/>, dropping the oldest entries past <see cref="MaxLogQueueEntries"/>.
@@ -97,17 +108,6 @@ public sealed class SetupServer : IDisposable
         {
         }
     }
-
-    /// <summary>
-    /// Gets a generic, non-identifying summary of what startup is currently doing. This is shown in the
-    /// always-visible header of the startup UI to unauthenticated clients, so it never contains server specific details.
-    /// </summary>
-    internal static string CurrentActivity => _currentActivity;
-
-    /// <summary>
-    /// Gets a value indicating whether Startup server is currently running.
-    /// </summary>
-    public bool IsAlive { get; internal set; }
 
     /// <summary>
     /// Starts the Bind-All Setup aspcore server to provide a reflection on the current core setup.

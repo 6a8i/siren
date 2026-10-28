@@ -114,6 +114,7 @@ public sealed partial class BaseItemRepository
             var groupedIds = dbQuery.GroupBy(e => e.SeriesPresentationUniqueKey).Select(e => e.Min(x => x.Id));
             dbQuery = context.BaseItems.AsNoTracking().Where(e => groupedIds.Contains(e.Id));
         }
+
         // No DISTINCT in the default branch: the filters only use Where/Any/Contains subqueries,
         // which never duplicate rows, and DISTINCT over the whole row (including the Data JSON)
         // forces SQLite to materialize the full set before ORDER BY/LIMIT can use an index.

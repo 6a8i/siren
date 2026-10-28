@@ -17,6 +17,23 @@ alto retorno, mantendo compatibilidade com os clientes Jellyfin existentes.
 Cada item é uma mudança pequena e isolada. Juntos, reduzem latência por requisição, pausas
 e trabalho desnecessário em background.
 
+**Status (2026-10-28):** implementada em quatro commits (banco de dados, inicialização e tarefas,
+API/HTTP, scan e mídia). Exceções e partes deixadas para a Onda 2:
+
+- Item 3 (Include de UserData filtrado por usuário): adiado. Itens carregados ficam no cache do
+  LibraryManager e são reutilizados por outros usuários; um include parcial poderia esconder o
+  user data deles. O `AsSplitQuery` do item 2 já elimina a multiplicação de linhas.
+- Item 12: só a configuração padrão de log mudou (Console assíncrono, enrichers duplicados
+  removidos do JSON). Instalações existentes mantêm o `logging.json` antigo; uma migração fica
+  para depois.
+- Item 14: feito o jitter da primeira execução; o semáforo para tarefas pesadas de ffmpeg não.
+- Item 16: feitos os headers de cache; servir `.br`/`.gz` pré-comprimidos não.
+- Item 22: feito o lock de envio por conexão; serializar uma vez por broadcast exige mudar a
+  interface dos controllers de sessão e ficou para a Onda 2.
+- Item 29: feitos o `HashSet` e a escrita única do histórico de falhas de capítulos, e o
+  `-nostats` da normalização de áudio. Filtrar em SQL o que falta processar e paginar por keyset
+  ficaram para a Onda 2.
+
 ### Banco de dados (SQLite + EF Core)
 
 | # | Problema | Onde | Mudança |
