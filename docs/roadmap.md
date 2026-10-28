@@ -117,18 +117,29 @@ Legenda: **feito**, **planejado** (fase futura), **descartado** (com o motivo).
 - Passar a CSP para `Enforce` depois de alguns dias sem violações no log, com teste de
   reprodução em todos os players.
 - Perfil infantil com interface simplificada (além do preset de classificação).
+- Restauração de backup pelo painel (hoje só pela API) e aviso quando a tarefa de backup
+  falha; alerta de disco cheio.
+- Histórico do que cada perfil assistiu, visível ao administrador da família; limite de
+  tempo de tela por perfil infantil.
+- Expiração automática de sessões antigas; lista de dispositivos por família com
+  "desconectar"; registro no log quando o rate limit bloqueia um IP repetidamente.
+- Medição automática do tempo de boot no CI para pegar regressões.
 
 ### Cliente web
 
-- Executar o workflow `e2e.yml` no GitHub e ampliar a suíte (criação de família pelo painel,
-  reprodução).
+- ~~Executar o workflow `e2e.yml` no GitHub~~ (passou na primeira execução, 2026-10-28) e
+  ampliar a suíte (criação de família pelo painel, reprodução).
+- PIN também para entrar nas configurações de um perfil infantil.
+- "Continuar assistindo" por perfil no seletor; atalho de troca de perfil pelo controle
+  remoto na TV.
+- Testes dos componentes de família (hoje só utilitários e hooks têm cobertura).
 - Migração das views legadas (login, wizard, cadastro e edição de usuários) para
   React e MUI.
 - Upload de uma foto própria como avatar (hoje só presets).
 - Remover as dependências de polyfill que sobraram no `package.json` e trocar o
   `classList.replace` do slideshow para dispensar o `classlist.js`.
 - Tradução das strings novas para os demais idiomas do cliente (hoje só en-US e
-  pt-BR; os outros caem no inglês).
+  pt-BR; os outros caem no inglês). Adiada por decisão do dono do projeto; fica por último.
 - Seções da tela inicial por perfil já existem nas preferências de exibição do upstream;
   nada a fazer.
 
