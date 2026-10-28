@@ -248,6 +248,13 @@ public class ServerConfiguration : BaseApplicationConfiguration
     public bool EnableSecurityHeaders { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets how the full Content-Security-Policy is sent. Only applies while
+    /// <see cref="EnableSecurityHeaders"/> is on. Defaults to report-only: browsers send violations to
+    /// <c>POST /System/CspReport</c>, where they are logged, and block nothing.
+    /// </summary>
+    public ContentSecurityPolicyMode ContentSecurityPolicyMode { get; set; } = ContentSecurityPolicyMode.ReportOnly;
+
+    /// <summary>
     /// Gets or sets the number of days we should retain activity logs.
     /// </summary>
     public int? ActivityLogRetentionDays { get; set; } = 30;

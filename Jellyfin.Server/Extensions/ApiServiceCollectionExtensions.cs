@@ -23,6 +23,7 @@ using Jellyfin.Api.Auth.UserPermissionPolicy;
 using Jellyfin.Api.Constants;
 using Jellyfin.Api.Controllers;
 using Jellyfin.Api.Formatters;
+using Jellyfin.Api.Helpers;
 using Jellyfin.Api.ModelBinders;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Enums;
@@ -189,6 +190,9 @@ namespace Jellyfin.Server.Extensions
             IMvcBuilder mvcBuilder = serviceCollection
                 .AddCors()
                 .AddTransient<ICorsPolicyProvider, CorsPolicyProvider>()
+                // One counter for the whole server: the CSP report endpoint logs each distinct violation
+                // once a minute no matter how many browsers send it.
+                .AddSingleton<CspReportThrottle>()
                 .Configure<ForwardedHeadersOptions>(options =>
                 {
                     ConfigureForwardHeaders(config, options);

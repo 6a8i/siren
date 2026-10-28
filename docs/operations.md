@@ -14,17 +14,76 @@ Toda resposta do servidor (API, web client, arquivos estáticos, erros, resposta
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | Links para outros sites levam só a origem, não a URL completa (que carrega ids de itens). |
 | `X-Frame-Options` | `SAMEORIGIN` | A página só pode ser embutida em `<iframe>` pela própria origem (navegadores antigos). |
 | `Content-Security-Policy` | `frame-ancestors 'self'` | O mesmo, para navegadores que honram CSP. |
+| `Content-Security-Policy-Report-Only` | a política completa (abaixo) | O navegador avisa o que a política bloquearia, sem bloquear nada. |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | O web client não usa nada disso; fica negado para a página e para qualquer frame dentro dela. |
-
-Não há uma CSP completa (`script-src`, `connect-src`...): ela exigiria acompanhar cada
-dependência do web client e de plugins e quebraria sem aviso.
 
 **Desligar:** `EnableSecurityHeaders` em `config/system.xml` (`ServerConfiguration`), padrão
 `true`. Quem embute o web client em um `<iframe>` de outra origem precisa pôr `false`, porque os
 dois cabeçalhos de frame bloqueiam exatamente isso. Também pode ser alterado por
 `POST /System/Configuration` como administrador; a mudança vale na requisição seguinte, sem
-reiniciar. Implementação: `Jellyfin.Api/Middleware/SecurityHeadersMiddleware.cs`, registrado em
-`Jellyfin.Server/Startup.cs` antes dos arquivos estáticos e do roteamento.
+reiniciar. Com `false` nenhum cabeçalho desta seção sai, nem a CSP. Implementação:
+`Jellyfin.Api/Middleware/SecurityHeadersMiddleware.cs`, registrado em `Jellyfin.Server/Startup.cs`
+antes dos arquivos estáticos e do roteamento.
+
+### Content-Security-Policy completa
+
+`ContentSecurityPolicyMode` em `config/system.xml` (`ServerConfiguration`) escolhe como a política
+completa é enviada; vale na requisição seguinte, sem reiniciar:
+
+| Valor | Cabeçalho | Efeito |
+|---|---|---|
+| `Off` | só `Content-Security-Policy: frame-ancestors 'self'` | O que havia antes da política existir. |
+| `ReportOnly` (padrão) | `Content-Security-Policy-Report-Only` com a política completa, mais o `frame-ancestors` de sempre no cabeçalho que bloqueia | O navegador manda um relatório para cada recurso que a política bloquearia e carrega tudo normalmente. |
+| `Enforce` | `Content-Security-Policy` com a política completa | O navegador bloqueia o que a política não permite. |
+
+A política é uma só, montada uma vez por processo (o `report-uri` recebe o `BaseUrl` na frente):
+
+```
+default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' blob: data:; font-src 'self' data:; connect-src 'self' ws: wss: https:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; report-uri /System/CspReport
+```
+
+Cada permissão existe por algo que o web client ou seus plugins fazem hoje (o comentário em
+`SecurityHeadersMiddleware.cs` lista uma a uma): scripts inline no `index.html` e nas páginas de
+configuração de plugins, `eval` em bibliotecas empacotadas, workers em `blob:` (libass, leitor de
+PDF), estilos inline do layout e dos temas, imagens de provedores de metadados servidas direto do
+provedor (`https:`), reprodução por `blob:` (HLS, MediaSource), fontes de ícones inline, websocket
+da sessão (`ws:`/`wss:`) e frames `https:` de plugins e trailers. O que a política de fato proíbe:
+scripts e estilos de outras origens, imagens em `http:` de outros hosts, `<base>` e envio de
+formulário para fora, e embutir a página em outra origem.
+
+**Relatórios.** O navegador envia cada violação em `POST /System/CspReport` (anônimo, sem contar
+no limite de autenticação; aceita `application/csp-report` e `application/reports+json`, responde
+204). O servidor grava uma linha de aviso por violação distinta:
+
+```
+CSP violation (report) on https://media.exemplo/web/: img-src blocked http://cdn.exemplo/poster.jpg, source https://media.exemplo/web/main.js:12, client 203.0.113.7
+```
+
+- `(report)` veio do cabeçalho report-only, `(enforce)` do cabeçalho que bloqueia.
+- `img-src blocked ...` é a diretiva violada e o recurso; `eval` ou `inline` aparecem no lugar
+  da URL quando o bloqueado é código, não um download.
+- `source ...:linha` é o script que pediu o recurso, quando o navegador sabe; `-` quando não.
+- Os campos são cortados em 512 caracteres e perdem caracteres de controle, então um relatório
+  forjado não consegue inserir linhas no log.
+
+Para o log não virar lixo com uma aba aberta em uma página quebrada, só as **20 primeiras
+violações distintas por minuto** (documento, diretiva, recurso e origem) são gravadas; repetições
+e o excedente são contados. Ao atingir o limite sai uma linha `CSP report limit reached ...` e, no
+primeiro relatório do minuto seguinte, uma linha `N further CSP violation reports in the previous
+window ... were not logged`. Corpos acima de 64 KiB recebem 413.
+
+**Passar para `Enforce`:**
+
+1. Deixe `ReportOnly` por alguns dias de uso normal, com todos os clientes e plugins que importam
+   (dashboard, reprodução com legendas, páginas de configuração de plugins, Live TV).
+2. Procure `CSP violation` no log. Cada linha é algo que `Enforce` quebraria: um plugin que carrega
+   script de CDN, um tema com imagens em `http:`, um canal que toca mídia de outro host
+   (`media-src`). Ajuste o plugin, proxie o recurso pelo servidor ou aceite perder aquilo.
+3. Com o log limpo, `ContentSecurityPolicyMode=Enforce` (XML ou `POST /System/Configuration`).
+   Se algo quebrar, volte para `ReportOnly`: a mudança vale na requisição seguinte.
+
+A política em si não tem chave de configuração: mudar uma diretiva exige recompilar, e é melhor
+assim, porque cada permissão a mais precisa de uma justificativa no comentário do middleware.
 
 ## Limite de tentativas de autenticação
 

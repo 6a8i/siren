@@ -1,10 +1,14 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
 using System.Net.Mime;
+using System.Threading;
+using System.Threading.Tasks;
 using Jellyfin.Api.Attributes;
+using Jellyfin.Api.Helpers;
 using Jellyfin.Api.Models.SystemInfoDtos;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Configuration;
@@ -32,6 +36,7 @@ public class SystemController : BaseJellyfinApiController
     private readonly IFileSystem _fileSystem;
     private readonly INetworkManager _networkManager;
     private readonly ISystemManager _systemManager;
+    private readonly CspReportThrottle _cspReportThrottle;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SystemController"/> class.
@@ -42,13 +47,15 @@ public class SystemController : BaseJellyfinApiController
     /// <param name="fileSystem">Instance of <see cref="IFileSystem"/> interface.</param>
     /// <param name="networkManager">Instance of <see cref="INetworkManager"/> interface.</param>
     /// <param name="systemManager">Instance of <see cref="ISystemManager"/> interface.</param>
+    /// <param name="cspReportThrottle">The throttle deciding which CSP violation reports are logged.</param>
     public SystemController(
         ILogger<SystemController> logger,
         IServerApplicationHost appHost,
         IServerApplicationPaths appPaths,
         IFileSystem fileSystem,
         INetworkManager networkManager,
-        ISystemManager systemManager)
+        ISystemManager systemManager,
+        CspReportThrottle cspReportThrottle)
     {
         _logger = logger;
         _appHost = appHost;
@@ -56,6 +63,7 @@ public class SystemController : BaseJellyfinApiController
         _fileSystem = fileSystem;
         _networkManager = networkManager;
         _systemManager = systemManager;
+        _cspReportThrottle = cspReportThrottle;
     }
 
     /// <summary>
@@ -104,6 +112,63 @@ public class SystemController : BaseJellyfinApiController
     [ProducesResponseType(StatusCodes.Status200OK)]
     public ActionResult<string> PingSystem()
         => _appHost.Name;
+
+    /// <summary>
+    /// Receives the Content-Security-Policy violation reports browsers send to the <c>report-uri</c> of
+    /// the policy, and logs them. Anonymous, because the browser sends them without credentials; not
+    /// rate limited as a login, because a page with one broken resource sends one per load.
+    /// </summary>
+    /// <param name="cancellationToken">Cancelled when the browser gives up on the request.</param>
+    /// <response code="204">Report received.</response>
+    /// <response code="413">Report larger than a browser would send.</response>
+    /// <response code="415">Not a CSP report content type.</response>
+    /// <returns>No content.</returns>
+    [HttpPost("CspReport")]
+    [AllowAnonymous]
+    [Consumes("application/csp-report", "application/reports+json")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status413PayloadTooLarge)]
+    [ProducesResponseType(StatusCodes.Status415UnsupportedMediaType)]
+    public async Task<ActionResult> PostCspReport(CancellationToken cancellationToken)
+    {
+        if (Request.ContentLength > CspViolationReport.MaxBodyBytes)
+        {
+            return StatusCode(StatusCodes.Status413PayloadTooLarge);
+        }
+
+        // One byte more than allowed tells a body without Content-Length apart from one exactly at the limit.
+        var buffer = ArrayPool<byte>.Shared.Rent(CspViolationReport.MaxBodyBytes + 1);
+        try
+        {
+            var length = 0;
+            while (length < buffer.Length)
+            {
+                var read = await Request.Body.ReadAsync(buffer.AsMemory(length), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                length += read;
+            }
+
+            if (length > CspViolationReport.MaxBodyBytes)
+            {
+                return StatusCode(StatusCodes.Status413PayloadTooLarge);
+            }
+
+            foreach (var report in CspViolationReport.Parse(buffer.AsMemory(0, length)))
+            {
+                LogCspReport(report);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+
+        return NoContent();
+    }
 
     /// <summary>
     /// Restarts the application.
@@ -224,5 +289,38 @@ public class SystemController : BaseJellyfinApiController
         var fileShare = file.LastWriteTimeUtc < DateTime.UtcNow.AddHours(-1) ? FileShare.Read : FileShare.ReadWrite;
         FileStream stream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, fileShare, IODefaults.FileStreamBufferSize, FileOptions.Asynchronous);
         return File(stream, "text/plain; charset=utf-8");
+    }
+
+    private void LogCspReport(CspViolationReport report)
+    {
+        var verdict = _cspReportThrottle.Register(report.ThrottleKey, out var droppedInPreviousWindow);
+        if (droppedInPreviousWindow > 0)
+        {
+            _logger.LogWarning(
+                "{Count} further CSP violation reports in the previous window were repeats or over the limit and were not logged",
+                droppedInPreviousWindow);
+        }
+
+        switch (verdict)
+        {
+            case CspReportVerdict.Log:
+                // The fields are already bounded and stripped of control characters by the parser.
+                _logger.LogWarning(
+                    "CSP violation ({Disposition}) on {DocumentUri}: {ViolatedDirective} blocked {BlockedUri}, source {SourceFile}:{LineNumber}, client {RemoteIp}",
+                    report.Disposition,
+                    report.DocumentUri,
+                    report.ViolatedDirective,
+                    report.BlockedUri,
+                    report.SourceFile,
+                    report.LineNumber,
+                    HttpContext.GetNormalizedRemoteIP());
+                break;
+            case CspReportVerdict.LimitReached:
+                _logger.LogWarning(
+                    "CSP report limit reached: {Limit} distinct violations logged in {Window}s; further reports are counted but not logged until the window ends",
+                    _cspReportThrottle.Limit,
+                    (int)_cspReportThrottle.Window.TotalSeconds);
+                break;
+        }
     }
 }
