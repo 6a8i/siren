@@ -30,13 +30,15 @@ public class CreateFamilyMemberDto
     public int? MaxParentalRating { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the profile can access every library. When neither this
-    /// nor <see cref="EnabledFolders"/> is given, the profile gets the access of whoever creates it.
+    /// Gets or sets a value indicating whether the profile reaches every library of its family. When
+    /// neither this nor <see cref="EnabledFolders"/> is given, the profile gets the access of whoever
+    /// creates it, within the family. A profile never reaches more than its family.
     /// </summary>
     public bool? EnableAllFolders { get; set; }
 
     /// <summary>
-    /// Gets or sets the libraries the profile can access when <see cref="EnableAllFolders"/> is false.
+    /// Gets or sets the libraries the profile reaches when <see cref="EnableAllFolders"/> is false.
+    /// Libraries outside the family's reach (or the creator's) are dropped.
     /// </summary>
     public Guid[]? EnabledFolders { get; set; }
 }

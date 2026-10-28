@@ -8,12 +8,14 @@ using Jellyfin.Api.Constants;
 using Jellyfin.Api.Extensions;
 using Jellyfin.Api.Models.FamilyDtos;
 using Jellyfin.Data;
+using Jellyfin.Data.Events.Families;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Extensions;
 using MediaBrowser.Controller.Authentication;
+using MediaBrowser.Controller.Events;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Controller.Playlists;
@@ -28,8 +30,8 @@ namespace Jellyfin.Api.Controllers;
 
 /// <summary>
 /// Families: groups of up to six profiles that only see each other. A server administrator creates
-/// them; a member with the family administrator permission manages the family's profiles without
-/// any access to the server dashboard.
+/// them and decides which libraries each family reaches; a member with the family administrator
+/// permission manages the family's profiles without any access to the server dashboard.
 /// </summary>
 [Route("Families")]
 [Authorize]
@@ -40,6 +42,7 @@ public class FamilyController : BaseJellyfinApiController
     private readonly ISessionManager _sessionManager;
     private readonly IPlaylistManager _playlistManager;
     private readonly IAuthorizationContext _authContext;
+    private readonly IEventManager _eventManager;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FamilyController"/> class.
@@ -49,18 +52,21 @@ public class FamilyController : BaseJellyfinApiController
     /// <param name="sessionManager">Instance of the <see cref="ISessionManager"/> interface.</param>
     /// <param name="playlistManager">Instance of the <see cref="IPlaylistManager"/> interface.</param>
     /// <param name="authContext">Instance of the <see cref="IAuthorizationContext"/> interface.</param>
+    /// <param name="eventManager">Instance of the <see cref="IEventManager"/> interface.</param>
     public FamilyController(
         IFamilyManager familyManager,
         IUserManager userManager,
         ISessionManager sessionManager,
         IPlaylistManager playlistManager,
-        IAuthorizationContext authContext)
+        IAuthorizationContext authContext,
+        IEventManager eventManager)
     {
         _familyManager = familyManager;
         _userManager = userManager;
         _sessionManager = sessionManager;
         _playlistManager = playlistManager;
         _authContext = authContext;
+        _eventManager = eventManager;
     }
 
     private bool IsServerAdministrator => User.IsInRole(UserRoles.Administrator);
@@ -77,7 +83,7 @@ public class FamilyController : BaseJellyfinApiController
         => Ok(_familyManager.GetFamilies().Select(ToDto));
 
     /// <summary>
-    /// Creates a family.
+    /// Creates a family that reaches every library.
     /// </summary>
     /// <param name="request">The family to create.</param>
     /// <response code="200">Family created.</response>
@@ -149,13 +155,14 @@ public class FamilyController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Renames a family.
+    /// Updates a family: its name and, for a server administrator, the libraries it reaches. A field
+    /// left out keeps its value. Changing the libraries caps every profile to the new reach.
     /// </summary>
     /// <param name="familyId">The family id.</param>
     /// <param name="request">The new values.</param>
     /// <response code="204">Family updated.</response>
     /// <response code="400">The name is empty or already in use.</response>
-    /// <response code="403">The current user does not manage the family.</response>
+    /// <response code="403">The current user does not manage the family, or is not a server administrator and sent the library fields.</response>
     /// <response code="404">Family not found.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("{familyId}")]
@@ -178,13 +185,30 @@ public class FamilyController : BaseJellyfinApiController
             return Forbidden("Only a family administrator can change the family.");
         }
 
-        try
+        var changesLibraries = request.EnableAllFolders is not null || request.EnabledFolders is not null;
+        if (changesLibraries && !IsServerAdministrator)
         {
-            await _familyManager.RenameFamilyAsync(family.Id, request.Name).ConfigureAwait(false);
+            return Forbidden("Only a server administrator can change the libraries a family reaches.");
         }
-        catch (ArgumentException e)
+
+        if (request.Name is not null)
         {
-            return BadRequest(e.Message);
+            try
+            {
+                await _familyManager.RenameFamilyAsync(family.Id, request.Name).ConfigureAwait(false);
+            }
+            catch (ArgumentException e)
+            {
+                return BadRequest(e.Message);
+            }
+        }
+
+        if (changesLibraries)
+        {
+            // A list without the flag means "only these"; the flag without a list keeps the stored list.
+            var enableAllFolders = request.EnableAllFolders ?? false;
+            var enabledFolders = request.EnabledFolders ?? family.GetEnabledFolderIds();
+            await _familyManager.UpdateLibraryAccessAsync(family.Id, enableAllFolders, enabledFolders).ConfigureAwait(false);
         }
 
         return NoContent();
@@ -217,6 +241,7 @@ public class FamilyController : BaseJellyfinApiController
             foreach (var member in _familyManager.GetMembers(family.Id))
             {
                 await DeleteUserCompletely(member.Id).ConfigureAwait(false);
+                await _eventManager.PublishAsync(new FamilyProfileDeletedEventArgs(family, member)).ConfigureAwait(false);
             }
         }
 
@@ -231,12 +256,12 @@ public class FamilyController : BaseJellyfinApiController
     /// <response code="200">Profiles returned.</response>
     /// <response code="403">The current user is not a member of the family.</response>
     /// <response code="404">Family not found.</response>
-    /// <returns>The profiles. <c>HasPassword</c> tells whether a profile asks for a PIN when switching to it.</returns>
+    /// <returns>The profiles. <c>HasPin</c> tells whether a profile asks for a PIN when switching to it.</returns>
     [HttpGet("{familyId}/Members")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public ActionResult<IEnumerable<UserDto>> GetMembers([FromRoute, Required] Guid familyId)
+    public ActionResult<IEnumerable<FamilyMemberDto>> GetMembers([FromRoute, Required] Guid familyId)
     {
         var family = _familyManager.GetFamily(familyId);
         if (family is null)
@@ -249,11 +274,49 @@ public class FamilyController : BaseJellyfinApiController
             return Forbidden("Only members of the family can see its profiles.");
         }
 
-        return Ok(_familyManager.GetMembers(family.Id).Select(ToMemberDto));
+        return Ok(_familyManager.GetMembers(family.Id).Select(member => ToMemberDto(member, family)));
     }
 
     /// <summary>
-    /// Adds a profile to a family.
+    /// Gets a profile of a family.
+    /// </summary>
+    /// <param name="familyId">The family id.</param>
+    /// <param name="userId">The profile's user id.</param>
+    /// <response code="200">Profile returned.</response>
+    /// <response code="403">The current user is not a member of the family.</response>
+    /// <response code="404">Family or profile not found.</response>
+    /// <returns>The profile.</returns>
+    [HttpGet("{familyId}/Members/{userId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<FamilyMemberDto> GetMember(
+        [FromRoute, Required] Guid familyId,
+        [FromRoute, Required] Guid userId)
+    {
+        var family = _familyManager.GetFamily(familyId);
+        if (family is null)
+        {
+            return NotFound("Family not found.");
+        }
+
+        if (!CanView(family))
+        {
+            return Forbidden("Only members of the family can see its profiles.");
+        }
+
+        var member = GetMember(family, userId);
+        if (member is null)
+        {
+            return NotFound("Profile not found in this family.");
+        }
+
+        return ToMemberDto(member, family);
+    }
+
+    /// <summary>
+    /// Adds a profile to a family. The profile is locked out after a few wrong PINs; a family
+    /// administrator unlocks it by enabling it again.
     /// </summary>
     /// <param name="familyId">The family id.</param>
     /// <param name="request">The profile to create.</param>
@@ -267,7 +330,7 @@ public class FamilyController : BaseJellyfinApiController
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UserDto>> CreateMember(
+    public async Task<ActionResult<FamilyMemberDto>> CreateMember(
         [FromRoute, Required] Guid familyId,
         [FromBody, Required] CreateFamilyMemberDto request)
     {
@@ -308,11 +371,13 @@ public class FamilyController : BaseJellyfinApiController
         await _familyManager.AssignUserAsync(newUser.Id, family.Id).ConfigureAwait(false);
 
         // A profile starts with the plain defaults: it is listed on the family's devices, cannot
-        // touch the library's content and only reaches what its creator reaches.
+        // touch the library's content, locks out after a few wrong PINs and only reaches what its
+        // family and its creator reach.
         var policy = _userManager.GetUserDto(_userManager.GetUserById(newUser.Id)!).Policy;
         policy.IsHidden = false;
         policy.IsFamilyAdministrator = request.IsFamilyAdministrator;
         policy.MaxParentalRating = request.MaxParentalRating;
+        policy.LoginAttemptsBeforeLockout = Family.LoginAttemptsBeforeLockout;
         policy.EnableContentDeletion = false;
         policy.EnableContentDeletionFromFolders = [];
         policy.EnableLiveTvManagement = false;
@@ -320,14 +385,17 @@ public class FamilyController : BaseJellyfinApiController
         policy.EnableSubtitleManagement = false;
         policy.EnableLyricManagement = false;
         policy.EnableRemoteControlOfOtherUsers = false;
-        ApplyLibraryAccess(policy, request.EnableAllFolders, request.EnabledFolders, GetCaller());
+        ApplyLibraryAccess(policy, request.EnableAllFolders, request.EnabledFolders, GetCaller(), family);
         await _userManager.UpdatePolicyAsync(newUser.Id, policy).ConfigureAwait(false);
 
-        return ToMemberDto(_userManager.GetUserById(newUser.Id)!);
+        var created = _userManager.GetUserById(newUser.Id)!;
+        await _eventManager.PublishAsync(new FamilyProfileCreatedEventArgs(family, created)).ConfigureAwait(false);
+        return ToMemberDto(created, family);
     }
 
     /// <summary>
-    /// Moves an existing user into a family.
+    /// Moves an existing user into a family. The user keeps its settings, capped to the libraries
+    /// the family reaches.
     /// </summary>
     /// <param name="familyId">The family id.</param>
     /// <param name="userId">The user id.</param>
@@ -344,14 +412,21 @@ public class FamilyController : BaseJellyfinApiController
         [FromRoute, Required] Guid familyId,
         [FromRoute, Required] Guid userId)
     {
-        if (_familyManager.GetFamily(familyId) is null)
+        var family = _familyManager.GetFamily(familyId);
+        if (family is null)
         {
             return NotFound("Family not found.");
         }
 
-        if (_userManager.GetUserById(userId) is null)
+        var user = _userManager.GetUserById(userId);
+        if (user is null)
         {
             return NotFound("User not found.");
+        }
+
+        if (Nullable.Equals(user.FamilyId, family.Id))
+        {
+            return NoContent();
         }
 
         try
@@ -363,26 +438,27 @@ public class FamilyController : BaseJellyfinApiController
             return BadRequest(e.Message);
         }
 
+        await _eventManager.PublishAsync(new FamilyProfileLinkedEventArgs(family, _userManager.GetUserById(userId)!)).ConfigureAwait(false);
         return NoContent();
     }
 
     /// <summary>
-    /// Updates a family profile.
+    /// Updates a family profile. Enabling a profile also unlocks it after too many wrong PINs.
     /// </summary>
     /// <param name="familyId">The family id.</param>
     /// <param name="userId">The profile's user id.</param>
     /// <param name="request">The new values.</param>
-    /// <response code="204">Profile updated.</response>
+    /// <response code="200">Profile updated.</response>
     /// <response code="400">The name is taken, or the change would leave the family without an administrator.</response>
     /// <response code="403">The current user does not manage the family.</response>
     /// <response code="404">Family or profile not found.</response>
-    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    /// <returns>The updated profile.</returns>
     [HttpPost("{familyId}/Members/{userId}")]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult> UpdateMember(
+    public async Task<ActionResult<FamilyMemberDto>> UpdateMember(
         [FromRoute, Required] Guid familyId,
         [FromRoute, Required] Guid userId,
         [FromBody, Required] UpdateFamilyMemberDto request)
@@ -436,7 +512,13 @@ public class FamilyController : BaseJellyfinApiController
         policy.IsFamilyAdministrator = request.IsFamilyAdministrator;
         policy.IsDisabled = request.IsDisabled;
         policy.MaxParentalRating = request.MaxParentalRating;
-        ApplyLibraryAccess(policy, request.EnableAllFolders, request.EnabledFolders ?? [], caller);
+        if (!request.IsDisabled)
+        {
+            // Enabling is also the unlock: the wrong PINs are forgotten.
+            policy.InvalidLoginAttemptCount = 0;
+        }
+
+        ApplyLibraryAccess(policy, request.EnableAllFolders, request.EnabledFolders ?? [], caller, family);
         await _userManager.UpdatePolicyAsync(member.Id, policy).ConfigureAwait(false);
 
         if (request.IsDisabled)
@@ -444,7 +526,7 @@ public class FamilyController : BaseJellyfinApiController
             await _sessionManager.RevokeUserTokens(member.Id, null).ConfigureAwait(false);
         }
 
-        return NoContent();
+        return ToMemberDto(_userManager.GetUserById(member.Id)!, family);
     }
 
     /// <summary>
@@ -551,10 +633,12 @@ public class FamilyController : BaseJellyfinApiController
         if (deleteUser)
         {
             await DeleteUserCompletely(member.Id).ConfigureAwait(false);
+            await _eventManager.PublishAsync(new FamilyProfileDeletedEventArgs(family, member)).ConfigureAwait(false);
         }
         else
         {
             await _familyManager.AssignUserAsync(member.Id, null).ConfigureAwait(false);
+            await _eventManager.PublishAsync(new FamilyProfileUnlinkedEventArgs(family, member)).ConfigureAwait(false);
         }
 
         return NoContent();
@@ -570,7 +654,7 @@ public class FamilyController : BaseJellyfinApiController
     /// <response code="200">Switched; the result carries the new access token.</response>
     /// <response code="400">The profile is the current one.</response>
     /// <response code="401">Wrong PIN.</response>
-    /// <response code="403">The current user is not a member of the family, or the profile is disabled.</response>
+    /// <response code="403">The current user is not a member of the family, or the profile is disabled or locked out.</response>
     /// <response code="404">Family or profile not found.</response>
     /// <returns>The new session.</returns>
     [HttpPost("{familyId}/Members/{userId}/Switch")]
@@ -591,7 +675,7 @@ public class FamilyController : BaseJellyfinApiController
         }
 
         var caller = GetCaller();
-        if (caller is null || !caller.FamilyId.Equals(family.Id))
+        if (caller is null || !Nullable.Equals(caller.FamilyId, family.Id))
         {
             return Forbidden("Only members of the family can switch between its profiles.");
         }
@@ -624,27 +708,32 @@ public class FamilyController : BaseJellyfinApiController
             Username = target.Username
         }).ConfigureAwait(false);
 
+        await _eventManager.PublishAsync(new FamilyProfileSwitchedEventArgs(family, caller, target)).ConfigureAwait(false);
         return result;
     }
 
     /// <summary>
-    /// Limits a profile's library access to what the managing user can reach. A family administrator
-    /// cannot hand out libraries they do not have; a server administrator (or an API key) can.
+    /// Limits a profile's library access to what the family reaches and, for a family administrator,
+    /// to what they reach themselves. A server administrator (or an API key) hands out the whole
+    /// family reach. "All folders" means every library of the family.
     /// </summary>
-    private static void ApplyLibraryAccess(UserPolicy policy, bool? enableAllFolders, Guid[]? enabledFolders, User? manager)
+    private static void ApplyLibraryAccess(UserPolicy policy, bool? enableAllFolders, Guid[]? enabledFolders, User? manager, Family family)
     {
         // What the manager can reach: null means everything.
-        Guid[]? reach = manager is null
+        Guid[]? managerReach = manager is null
             || manager.HasPermission(PermissionKind.IsAdministrator)
             || manager.HasPermission(PermissionKind.EnableAllFolders)
             ? null
             : manager.GetPreferenceValues<Guid>(PreferenceKind.EnabledFolders);
 
+        // What can be granted: the family's reach, narrowed by the manager's own.
+        var reach = Intersect(family.GetLibraryReach(), managerReach);
+
         bool all;
         Guid[] folders;
         if (enableAllFolders is null && enabledFolders is null)
         {
-            // Nothing requested: the profile gets the manager's own access.
+            // Nothing requested: the profile gets everything the manager can grant.
             all = reach is null;
             folders = reach ?? [];
         }
@@ -671,6 +760,19 @@ public class FamilyController : BaseJellyfinApiController
         policy.EnabledFolders = folders;
     }
 
+    /// <summary>
+    /// Intersects two reaches, where <c>null</c> means everything.
+    /// </summary>
+    private static Guid[]? Intersect(Guid[]? first, Guid[]? second)
+    {
+        if (first is null)
+        {
+            return second;
+        }
+
+        return second is null ? first : first.Intersect(second).ToArray();
+    }
+
     private User? GetCaller()
     {
         var userId = User.GetUserId();
@@ -678,18 +780,18 @@ public class FamilyController : BaseJellyfinApiController
     }
 
     private bool CanView(Family family)
-        => IsServerAdministrator || (GetCaller() is { } caller && caller.FamilyId.Equals(family.Id));
+        => IsServerAdministrator || (GetCaller() is { } caller && Nullable.Equals(caller.FamilyId, family.Id));
 
     private bool CanManage(Family family)
         => IsServerAdministrator
             || (GetCaller() is { } caller
-                && caller.FamilyId.Equals(family.Id)
+                && Nullable.Equals(caller.FamilyId, family.Id)
                 && caller.HasPermission(PermissionKind.IsFamilyAdministrator));
 
     private User? GetMember(Family family, Guid userId)
     {
         var user = _userManager.GetUserById(userId);
-        return user is not null && user.FamilyId.Equals(family.Id) ? user : null;
+        return user is not null && Nullable.Equals(user.FamilyId, family.Id) ? user : null;
     }
 
     private ObjectResult Forbidden(string message)
@@ -702,16 +804,38 @@ public class FamilyController : BaseJellyfinApiController
             Name = family.Name,
             DateCreated = family.DateCreated,
             MemberCount = _familyManager.GetMembers(family.Id).Count,
-            MaxMembers = _familyManager.MaxMembers
+            MaxMembers = _familyManager.MaxMembers,
+            EnableAllFolders = family.EnableAllFolders,
+            EnabledFolders = family.GetEnabledFolderIds()
         };
 
-    private UserDto ToMemberDto(User user)
+    private FamilyMemberDto ToMemberDto(User user, Family family)
     {
-        var dto = _userManager.GetUserDto(user, HttpContext.GetNormalizedRemoteIP().ToString());
-        var hasPassword = !string.IsNullOrEmpty(user.Password);
-#pragma warning disable CS0618 // Family members may know which of their own profiles ask for a PIN.
-        dto.HasPassword = hasPassword;
-        dto.HasConfiguredPassword = hasPassword;
+        var source = _userManager.GetUserDto(user, HttpContext.GetNormalizedRemoteIP().ToString());
+        var hasPin = !string.IsNullOrEmpty(user.Password);
+        var dto = new FamilyMemberDto
+        {
+            Name = source.Name,
+            ServerId = source.ServerId,
+            ServerName = source.ServerName,
+            Id = source.Id,
+            FamilyId = source.FamilyId,
+            PrimaryImageTag = source.PrimaryImageTag,
+            EnableAutoLogin = source.EnableAutoLogin,
+            LastLoginDate = source.LastLoginDate,
+            LastActivityDate = source.LastActivityDate,
+            Configuration = source.Configuration,
+            Policy = source.Policy,
+            PrimaryImageAspectRatio = source.PrimaryImageAspectRatio,
+            HasPin = hasPin,
+            IsLockedOut = user.HasPermission(PermissionKind.IsDisabled)
+                && user.LoginAttemptsBeforeLockout is > 0
+                && user.InvalidLoginAttemptCount >= user.LoginAttemptsBeforeLockout,
+            HasAllFamilyFolders = user.HasAllFamilyFolders(family)
+        };
+#pragma warning disable CS0618 // Older clients read the PIN flag from the obsolete properties; kept for one more release.
+        dto.HasPassword = hasPin;
+        dto.HasConfiguredPassword = hasPin;
 #pragma warning restore CS0618
         return dto;
     }

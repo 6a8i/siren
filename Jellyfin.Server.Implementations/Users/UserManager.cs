@@ -956,6 +956,19 @@ namespace Jellyfin.Server.Implementations.Users
                     user.SetPreference(PreferenceKind.EnabledFolders, policy.EnabledFolders);
                     user.SetPreference(PreferenceKind.EnableContentDeletionFromFolders, policy.EnableContentDeletionFromFolders);
 
+                    // A family member never reaches more than the family, whichever page edits the policy.
+                    if (user.FamilyId is { } familyId)
+                    {
+                        var family = await dbContext.Families
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync(f => f.Id.Equals(familyId))
+                            .ConfigureAwait(false);
+                        if (family is not null)
+                        {
+                            user.CapToFamily(family);
+                        }
+                    }
+
                     dbContext.Update(user);
                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
                     InvalidateUserCache();

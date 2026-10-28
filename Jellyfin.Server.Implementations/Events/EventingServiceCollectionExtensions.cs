@@ -1,5 +1,7 @@
+using Jellyfin.Data.Events.Families;
 using Jellyfin.Data.Events.System;
 using Jellyfin.Data.Events.Users;
+using Jellyfin.Server.Implementations.Events.Consumers.Families;
 using Jellyfin.Server.Implementations.Events.Consumers.Library;
 using Jellyfin.Server.Implementations.Events.Consumers.Security;
 using Jellyfin.Server.Implementations.Events.Consumers.Session;
@@ -30,6 +32,16 @@ namespace Jellyfin.Server.Implementations.Events
         /// <param name="collection">The service collection.</param>
         public static void AddEventServices(this IServiceCollection collection)
         {
+            // Family consumers
+            collection.AddScoped<IEventConsumer<FamilyCreatedEventArgs>, FamilyCreatedLogger>();
+            collection.AddScoped<IEventConsumer<FamilyRenamedEventArgs>, FamilyRenamedLogger>();
+            collection.AddScoped<IEventConsumer<FamilyDeletedEventArgs>, FamilyDeletedLogger>();
+            collection.AddScoped<IEventConsumer<FamilyProfileCreatedEventArgs>, FamilyProfileCreatedLogger>();
+            collection.AddScoped<IEventConsumer<FamilyProfileLinkedEventArgs>, FamilyProfileLinkedLogger>();
+            collection.AddScoped<IEventConsumer<FamilyProfileUnlinkedEventArgs>, FamilyProfileUnlinkedLogger>();
+            collection.AddScoped<IEventConsumer<FamilyProfileDeletedEventArgs>, FamilyProfileDeletedLogger>();
+            collection.AddScoped<IEventConsumer<FamilyProfileSwitchedEventArgs>, FamilyProfileSwitchedLogger>();
+
             // Library consumers
             collection.AddScoped<IEventConsumer<LyricDownloadFailureEventArgs>, LyricDownloadFailureLogger>();
             collection.AddScoped<IEventConsumer<SubtitleDownloadFailureEventArgs>, SubtitleDownloadFailureLogger>();

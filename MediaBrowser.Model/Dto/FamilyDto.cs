@@ -31,4 +31,15 @@ public class FamilyDto
     /// Gets or sets the number of profiles the family can hold.
     /// </summary>
     public int MaxMembers { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the family reaches every library. Profiles inherit
+    /// the family's reach and never exceed it.
+    /// </summary>
+    public bool EnableAllFolders { get; set; }
+
+    /// <summary>
+    /// Gets or sets the libraries the family reaches when <see cref="EnableAllFolders"/> is false.
+    /// </summary>
+    public Guid[] EnabledFolders { get; set; } = [];
 }

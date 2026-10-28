@@ -20,7 +20,8 @@ public class UpdateFamilyMemberDto
     public bool IsFamilyAdministrator { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the profile is disabled.
+    /// Gets or sets a value indicating whether the profile is disabled. <c>false</c> also unlocks a
+    /// profile that was locked out by wrong PINs.
     /// </summary>
     public bool IsDisabled { get; set; }
 
@@ -30,12 +31,14 @@ public class UpdateFamilyMemberDto
     public int? MaxParentalRating { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether the profile can access every library.
+    /// Gets or sets a value indicating whether the profile reaches every library of its family. A
+    /// profile never reaches more than its family.
     /// </summary>
     public bool EnableAllFolders { get; set; }
 
     /// <summary>
-    /// Gets or sets the libraries the profile can access when <see cref="EnableAllFolders"/> is false.
+    /// Gets or sets the libraries the profile reaches when <see cref="EnableAllFolders"/> is false.
+    /// Libraries outside the family's reach (or the editor's) are dropped.
     /// </summary>
     public Guid[]? EnabledFolders { get; set; }
 }

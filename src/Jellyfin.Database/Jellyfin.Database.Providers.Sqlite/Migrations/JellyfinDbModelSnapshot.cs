@@ -660,6 +660,13 @@ namespace Jellyfin.Server.Implementations.Migrations
                     b.Property<DateTime>("DateCreated")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("EnableAllFolders")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("EnabledFolders")
+                        .HasMaxLength(65535)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(255)

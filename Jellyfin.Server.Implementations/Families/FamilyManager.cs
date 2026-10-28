@@ -4,10 +4,12 @@ using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Data;
+using Jellyfin.Data.Events.Families;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Common.Extensions;
+using MediaBrowser.Controller.Events;
 using MediaBrowser.Controller.Library;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -26,6 +28,7 @@ public sealed class FamilyManager : IFamilyManager
 {
     private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
     private readonly IUserManager _userManager;
+    private readonly IEventManager _eventManager;
     private readonly ILogger<FamilyManager> _logger;
 
     private volatile IReadOnlyDictionary<Guid, Family>? _families;
@@ -35,14 +38,17 @@ public sealed class FamilyManager : IFamilyManager
     /// </summary>
     /// <param name="dbProvider">The database provider.</param>
     /// <param name="userManager">The user manager.</param>
+    /// <param name="eventManager">The event manager.</param>
     /// <param name="logger">The logger.</param>
     public FamilyManager(
         IDbContextFactory<JellyfinDbContext> dbProvider,
         IUserManager userManager,
+        IEventManager eventManager,
         ILogger<FamilyManager> logger)
     {
         _dbProvider = dbProvider;
         _userManager = userManager;
+        _eventManager = eventManager;
         _logger = logger;
     }
 
@@ -62,7 +68,7 @@ public sealed class FamilyManager : IFamilyManager
     /// <inheritdoc />
     public IReadOnlyList<User> GetMembers(Guid familyId)
         => _userManager.GetUsers()
-            .Where(user => user.FamilyId == familyId)
+            .Where(user => Nullable.Equals(user.FamilyId, familyId))
             .OrderBy(user => user.Username, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -85,6 +91,7 @@ public sealed class FamilyManager : IFamilyManager
 
         _families = null;
         _logger.LogInformation("Created family {Name} ({Id})", newFamily.Name, newFamily.Id);
+        await _eventManager.PublishAsync(new FamilyCreatedEventArgs(newFamily)).ConfigureAwait(false);
         return newFamily;
     }
 
@@ -92,24 +99,62 @@ public sealed class FamilyManager : IFamilyManager
     public async Task RenameFamilyAsync(Guid familyId, string name)
     {
         name = ValidateName(name);
-        if (GetSnapshot().Values.Any(family => family.Id != familyId && string.Equals(family.Name, name, StringComparison.OrdinalIgnoreCase)))
+        if (GetSnapshot().Values.Any(family => !family.Id.Equals(familyId) && string.Equals(family.Name, name, StringComparison.OrdinalIgnoreCase)))
         {
             throw new ArgumentException(string.Format(CultureInfo.InvariantCulture, "A family named '{0}' already exists.", name));
         }
 
+        string previousName;
+        Family family;
         var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
         await using (dbContext.ConfigureAwait(false))
         {
-            var family = await dbContext.Families
-                .FirstOrDefaultAsync(f => f.Id == familyId)
+            family = await dbContext.Families
+                .FirstOrDefaultAsync(f => f.Id.Equals(familyId))
                 .ConfigureAwait(false)
                 ?? throw new ResourceNotFoundException("Family not found.");
 
+            previousName = family.Name;
             family.Name = name;
             await dbContext.SaveChangesAsync().ConfigureAwait(false);
         }
 
         _families = null;
+        if (!string.Equals(previousName, name, StringComparison.Ordinal))
+        {
+            await _eventManager.PublishAsync(new FamilyRenamedEventArgs(family, previousName)).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task UpdateLibraryAccessAsync(Guid familyId, bool enableAllFolders, IReadOnlyList<Guid> enabledFolders)
+    {
+        ArgumentNullException.ThrowIfNull(enabledFolders);
+
+        var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
+        await using (dbContext.ConfigureAwait(false))
+        {
+            var family = await dbContext.Families
+                .FirstOrDefaultAsync(f => f.Id.Equals(familyId))
+                .ConfigureAwait(false)
+                ?? throw new ResourceNotFoundException("Family not found.");
+
+            family.EnableAllFolders = enableAllFolders;
+            family.SetEnabledFolderIds(enabledFolders);
+            await dbContext.SaveChangesAsync().ConfigureAwait(false);
+        }
+
+        _families = null;
+
+        // The members may have been granted libraries the family no longer reaches.
+        var updated = GetFamily(familyId)!;
+        foreach (var member in GetMembers(familyId))
+        {
+            if (member.CapToFamily(updated))
+            {
+                await _userManager.UpdateUserAsync(member).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -128,13 +173,14 @@ public sealed class FamilyManager : IFamilyManager
         await using (dbContext.ConfigureAwait(false))
         {
             await dbContext.Families
-                .Where(f => f.Id == familyId)
+                .Where(f => f.Id.Equals(familyId))
                 .ExecuteDeleteAsync()
                 .ConfigureAwait(false);
         }
 
         _families = null;
         _logger.LogInformation("Deleted family {Name} ({Id})", family.Name, family.Id);
+        await _eventManager.PublishAsync(new FamilyDeletedEventArgs(family)).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -159,7 +205,7 @@ public sealed class FamilyManager : IFamilyManager
         }
 
         var family = GetFamily(familyId.Value) ?? throw new ResourceNotFoundException("Family not found.");
-        if (user.FamilyId == family.Id)
+        if (Nullable.Equals(user.FamilyId, family.Id))
         {
             return;
         }
@@ -179,6 +225,7 @@ public sealed class FamilyManager : IFamilyManager
         }
 
         user.FamilyId = family.Id;
+        user.CapToFamily(family);
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
     }
 

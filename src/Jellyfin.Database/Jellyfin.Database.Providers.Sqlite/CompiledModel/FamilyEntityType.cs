@@ -20,7 +20,7 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
                 "Jellyfin.Database.Implementations.Entities.Family",
                 typeof(Family),
                 baseEntityType,
-                propertyCount: 4,
+                propertyCount: 6,
                 keyCount: 1);
 
             var id = runtimeEntityType.AddProperty(
@@ -41,6 +41,21 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
                 DateTime (DateTime v) => v.ToUniversalTime(),
                 DateTime (DateTime v) => DateTime.SpecifyKind(v, DateTimeKind.Utc)));
             dateCreated.SetSentinelFromProviderValue(new DateTime(1, 1, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+
+            var enableAllFolders = runtimeEntityType.AddProperty(
+                "EnableAllFolders",
+                typeof(bool),
+                propertyInfo: typeof(Family).GetProperty("EnableAllFolders", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                fieldInfo: typeof(Family).GetField("<EnableAllFolders>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                sentinel: false);
+
+            var enabledFolders = runtimeEntityType.AddProperty(
+                "EnabledFolders",
+                typeof(string),
+                propertyInfo: typeof(Family).GetProperty("EnabledFolders", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                fieldInfo: typeof(Family).GetField("<EnabledFolders>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                nullable: true,
+                maxLength: 65535);
 
             var name = runtimeEntityType.AddProperty(
                 "Name",

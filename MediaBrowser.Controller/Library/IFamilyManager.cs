@@ -36,7 +36,7 @@ public interface IFamilyManager
     IReadOnlyList<User> GetMembers(Guid familyId);
 
     /// <summary>
-    /// Creates a family.
+    /// Creates a family that reaches every library.
     /// </summary>
     /// <param name="name">The family name; must not be in use by another family.</param>
     /// <returns>The new family.</returns>
@@ -51,6 +51,17 @@ public interface IFamilyManager
     Task RenameFamilyAsync(Guid familyId, string name);
 
     /// <summary>
+    /// Sets the libraries a family reaches and caps every member to them: a member that could reach
+    /// everything now reaches exactly the family's libraries, and a member with a list keeps only the
+    /// libraries the family also reaches.
+    /// </summary>
+    /// <param name="familyId">The family id.</param>
+    /// <param name="enableAllFolders">Whether the family reaches every library.</param>
+    /// <param name="enabledFolders">The libraries the family reaches when <paramref name="enableAllFolders"/> is <c>false</c>.</param>
+    /// <returns>A task.</returns>
+    Task UpdateLibraryAccessAsync(Guid familyId, bool enableAllFolders, IReadOnlyList<Guid> enabledFolders);
+
+    /// <summary>
     /// Deletes a family. Its members are kept as users without a family and lose the family
     /// administrator permission.
     /// </summary>
@@ -61,7 +72,8 @@ public interface IFamilyManager
     /// <summary>
     /// Moves a user into a family, or out of any family when <paramref name="familyId"/> is <c>null</c>.
     /// A server administrator cannot join a family, and a family cannot grow past <see cref="MaxMembers"/>.
-    /// A user that leaves a family loses the family administrator permission.
+    /// A user that joins a family is capped to the family's libraries; a user that leaves a family
+    /// loses the family administrator permission.
     /// </summary>
     /// <param name="userId">The user id.</param>
     /// <param name="familyId">The family id, or <c>null</c>.</param>
