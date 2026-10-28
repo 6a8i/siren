@@ -157,6 +157,23 @@ namespace Emby.Server.Implementations.Session
         /// <value>All connections.</value>
         public IEnumerable<SessionInfo> Sessions => _activeConnections.Values.OrderByDescending(c => c.LastActivityDate);
 
+        /// <summary>
+        /// Looks a session up by its id without the snapshot and sort that <see cref="Sessions"/> does.
+        /// Enumerating the dictionary directly is lock-free; this runs on every playback report and command.
+        /// </summary>
+        private SessionInfo FindSessionById(string sessionId)
+        {
+            foreach (var (_, session) in _activeConnections)
+            {
+                if (string.Equals(session.Id, sessionId, StringComparison.Ordinal))
+                {
+                    return session;
+                }
+            }
+
+            return null;
+        }
+
         private void OnDeviceManagerDeviceOptionsUpdated(object sender, GenericEventArgs<Tuple<string, DeviceOptions>> e)
         {
             foreach (var session in Sessions)
@@ -504,11 +521,16 @@ namespace Emby.Server.Implementations.Session
             ArgumentException.ThrowIfNullOrEmpty(deviceId);
 
             var key = GetSessionKey(appName, deviceId, user?.Id ?? Guid.Empty);
-            SessionInfo newSession = CreateSessionInfo(key, appName, appVersion, deviceId, deviceName, remoteEndPoint, user);
-            SessionInfo sessionInfo = _activeConnections.GetOrAdd(key, newSession);
-            if (ReferenceEquals(newSession, sessionInfo))
+            // The session already exists for every request after the first one of a device, so do not
+            // build a new SessionInfo (MD5 of the key, device options, image tag) just to throw it away.
+            if (!_activeConnections.TryGetValue(key, out var sessionInfo))
             {
-                OnSessionStarted(newSession);
+                SessionInfo newSession = CreateSessionInfo(key, appName, appVersion, deviceId, deviceName, remoteEndPoint, user);
+                sessionInfo = _activeConnections.GetOrAdd(key, newSession);
+                if (ReferenceEquals(newSession, sessionInfo))
+                {
+                    OnSessionStarted(newSession);
+                }
             }
 
             sessionInfo.UserId = user?.Id ?? Guid.Empty;
@@ -1225,7 +1247,7 @@ namespace Emby.Server.Implementations.Session
         /// </exception>
         private SessionInfo GetSession(string sessionId, bool throwOnMissing = true)
         {
-            var session = Sessions.FirstOrDefault(i => string.Equals(i.Id, sessionId, StringComparison.Ordinal));
+            var session = FindSessionById(sessionId);
             if (session is null && throwOnMissing)
             {
                 throw new ResourceNotFoundException(
@@ -1238,7 +1260,7 @@ namespace Emby.Server.Implementations.Session
         private SessionInfo GetSessionToRemoteControl(string sessionId)
         {
             // Accept either device id or session id
-            var session = Sessions.FirstOrDefault(i => string.Equals(i.Id, sessionId, StringComparison.Ordinal));
+            var session = FindSessionById(sessionId);
 
             if (session is null)
             {

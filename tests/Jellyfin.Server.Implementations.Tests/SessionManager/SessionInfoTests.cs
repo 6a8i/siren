@@ -48,10 +48,11 @@ public class SessionInfoTests
             PositionTicks = reportedPositionTicks
         });
 
-        var estimatedPositionTicks = await automaticProgress.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        // The server advances the position every 5 seconds (SessionInfo.ProgressIntervalMs).
+        var estimatedPositionTicks = await automaticProgress.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         session.StopAutomaticProgress();
 
-        Assert.Equal(reportedPositionTicks + TimeSpan.TicksPerSecond, estimatedPositionTicks);
+        Assert.Equal(reportedPositionTicks + (5 * TimeSpan.TicksPerSecond), estimatedPositionTicks);
         Assert.Equal(estimatedPositionTicks, session.PlayState.PositionTicks);
         Assert.Equal(reportedPositionTicks, session.LastPlaybackCheckInPositionTicks);
     }

@@ -2003,8 +2003,6 @@ public class ImageController : BaseJellyfinApiController
         IDictionary<string, string> headers,
         string? tag)
     {
-        var (imagePath, imageContentType, dateImageModified) = await _imageProcessor.ProcessImage(imageProcessingOptions).ConfigureAwait(false);
-
         var disableCaching = Request.Headers[HeaderNames.CacheControl].Contains("no-cache");
         var hasTag = !string.IsNullOrEmpty(tag);
 
@@ -2012,6 +2010,21 @@ public class ImageController : BaseJellyfinApiController
         {
             Response.Headers.Append(key, value);
         }
+
+        // A tagged URL is immutable, so a matching If-None-Match can be answered before the image is
+        // looked up or resized: no stat of the original, no cache path hash, no encode on a cache miss.
+        if (!disableCaching && hasTag && IfNoneMatchMatches(tag!))
+        {
+            Response.Headers.Append(HeaderNames.Vary, HeaderNames.Accept);
+            Response.Headers.Append(HeaderNames.CacheControl, cacheDuration.HasValue
+                ? "public, max-age=" + cacheDuration.Value.TotalSeconds + ", immutable"
+                : "public");
+            Response.Headers.Append(HeaderNames.ETag, $"\"{tag}\"");
+            Response.StatusCode = StatusCodes.Status304NotModified;
+            return new ContentResult();
+        }
+
+        var (imagePath, imageContentType, dateImageModified) = await _imageProcessor.ProcessImage(imageProcessingOptions).ConfigureAwait(false);
 
         Response.ContentType = imageContentType ?? MediaTypeNames.Text.Plain;
         Response.Headers.Append(HeaderNames.Age, Convert.ToInt64((DateTime.UtcNow - dateImageModified).TotalSeconds).ToString(CultureInfo.InvariantCulture));
@@ -2038,20 +2051,11 @@ public class ImageController : BaseJellyfinApiController
 
             Response.Headers.Append(HeaderNames.LastModified, dateImageModified.ToUniversalTime().ToString("ddd, dd MMM yyyy HH:mm:ss \"GMT\"", CultureInfo.InvariantCulture));
 
-            // Add ETag header for stronger cache validation when tag is provided
+            // Add ETag header for stronger cache validation when tag is provided.
+            // The If-None-Match check already happened before the image was processed.
             if (hasTag)
             {
                 Response.Headers.Append(HeaderNames.ETag, $"\"{tag}\"");
-
-                // Check If-None-Match header for ETag-based validation (preferred over If-Modified-Since)
-                var ifNoneMatch = Request.Headers[HeaderNames.IfNoneMatch].ToString();
-                if (!string.IsNullOrEmpty(ifNoneMatch)
-                    && (string.Equals(ifNoneMatch, $"\"{tag}\"", StringComparison.Ordinal)
-                        || string.Equals(ifNoneMatch, tag, StringComparison.Ordinal)))
-                {
-                    Response.StatusCode = StatusCodes.Status304NotModified;
-                    return new ContentResult();
-                }
             }
 
             // Check If-Modified-Since header for time-based validation
@@ -2067,6 +2071,14 @@ public class ImageController : BaseJellyfinApiController
         }
 
         return PhysicalFile(imagePath, imageContentType ?? MediaTypeNames.Text.Plain);
+    }
+
+    private bool IfNoneMatchMatches(string tag)
+    {
+        var ifNoneMatch = Request.Headers[HeaderNames.IfNoneMatch].ToString();
+        return !string.IsNullOrEmpty(ifNoneMatch)
+            && (string.Equals(ifNoneMatch, $"\"{tag}\"", StringComparison.Ordinal)
+                || string.Equals(ifNoneMatch, tag, StringComparison.Ordinal));
     }
 
     internal static bool TryGetImageExtensionFromContentType(string? contentType, [NotNullWhen(true)] out string? extension)

@@ -1,11 +1,13 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Mime;
 using System.Text;
+using System.Text.RegularExpressions;
 using Emby.Server.Implementations.EntryPoints;
 using Emby.Server.Implementations.Localization;
 using Jellyfin.Api.Middleware;
@@ -26,6 +28,7 @@ using MediaBrowser.XbmcMetadata;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Localization;
+using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,7 +42,7 @@ namespace Jellyfin.Server
     /// <summary>
     /// Startup configuration for the Kestrel webhost.
     /// </summary>
-    public class Startup
+    public partial class Startup
     {
         private readonly CoreAppHost _serverApplicationHost;
         private readonly IConfiguration _configuration;
@@ -63,7 +66,17 @@ namespace Jellyfin.Server
         /// <param name="services">The service collection.</param>
         public void ConfigureServices(IServiceCollection services)
         {
-            services.AddResponseCompression();
+            services.AddResponseCompression(options =>
+            {
+                // Off by default because of BREACH, which needs attacker-controlled input reflected next to a
+                // secret in the same response. Item listings do not reflect secrets, and they are the responses
+                // that benefit: hundreds of KB of JSON per page for remote clients.
+                options.EnableForHttps = true;
+                options.Providers.Add<BrotliCompressionProvider>();
+                options.Providers.Add<GzipCompressionProvider>();
+            });
+            services.Configure<BrotliCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
+            services.Configure<GzipCompressionProviderOptions>(options => options.Level = CompressionLevel.Fastest);
             services.AddHttpContextAccessor();
             services.AddHttpsRedirection(options =>
             {
@@ -186,6 +199,10 @@ namespace Jellyfin.Server
 
                 mainApp.UseMiddleware<ResponseTimeMiddleware>();
 
+                // Only needs the remote IP, so it runs before anything that costs work: a blocked address
+                // no longer pays for authentication (token and user lookups), static files or routing.
+                mainApp.UseIPBasedAccessValidation();
+
                 mainApp.UseWebSockets();
 
                 mainApp.UseResponseCompression();
@@ -218,10 +235,13 @@ namespace Jellyfin.Server
                         ContentTypeProvider = extensionProvider,
                         OnPrepareResponse = (context) =>
                         {
-                            if (Path.GetFileName(context.File.Name).Equals("index.html", StringComparison.Ordinal))
-                            {
-                                context.Context.Response.Headers.CacheControl = new StringValues("no-cache");
-                            }
+                            // Bundles and chunks carry a content hash in their name, so a new build means a new
+                            // URL: browsers can keep them for a year without revalidating. Everything else
+                            // (index.html, config.json, the service worker, fonts, non-hashed scripts) is
+                            // revalidated on every load; the static file middleware answers those with a cheap 304.
+                            context.Context.Response.Headers.CacheControl = IsContentHashedFileName(context.File.Name)
+                                ? new StringValues("public, max-age=31536000, immutable")
+                                : new StringValues("no-cache");
                         }
                     });
 
@@ -235,7 +255,6 @@ namespace Jellyfin.Server
                 mainApp.UseRouting();
                 mainApp.UseAuthorization();
 
-                mainApp.UseIPBasedAccessValidation();
                 mainApp.UseWebSocketHandler();
                 mainApp.UseServerStartupMessage();
 
@@ -257,5 +276,15 @@ namespace Jellyfin.Server
                 });
             });
         }
+
+        /// <summary>
+        /// Whether a web client file name carries a content hash segment (for example
+        /// <c>1234.0a1b2c3d4e5f6a7b.chunk.js</c>), which makes its URL change whenever its content does.
+        /// </summary>
+        private static bool IsContentHashedFileName(string fileName)
+            => ContentHashSegment().IsMatch(fileName);
+
+        [GeneratedRegex(@"\.[0-9a-f]{8,}\.", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+        private static partial Regex ContentHashSegment();
     }
 }

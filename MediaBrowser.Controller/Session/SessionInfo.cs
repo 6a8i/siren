@@ -20,7 +20,14 @@ namespace MediaBrowser.Controller.Session
     public sealed class SessionInfo : IAsyncDisposable
     {
         // 1 second
-        private const long ProgressIncrement = 10000000;
+        /// <summary>
+        /// How often the server advances the position of a playing session on its own, between the client's
+        /// own progress reports. Every tick is a full OnPlaybackProgress (session lookup, user load, event
+        /// publish) that saves nothing, so 1 s per session was pure overhead; 5 s keeps the dashboard current.
+        /// </summary>
+        private const int ProgressIntervalMs = 5000;
+
+        private const long ProgressIncrement = ProgressIntervalMs * TimeSpan.TicksPerMillisecond;
 
         private readonly ISessionManager _sessionManager;
         private readonly ILogger _logger;
@@ -394,11 +401,11 @@ namespace MediaBrowser.Controller.Session
 
                 if (_progressTimer is null)
                 {
-                    _progressTimer = new Timer(OnProgressTimerCallback, null, 1000, 1000);
+                    _progressTimer = new Timer(OnProgressTimerCallback, null, ProgressIntervalMs, ProgressIntervalMs);
                 }
                 else
                 {
-                    _progressTimer.Change(1000, 1000);
+                    _progressTimer.Change(ProgressIntervalMs, ProgressIntervalMs);
                 }
             }
         }

@@ -1,5 +1,4 @@
 using System;
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -25,6 +24,12 @@ namespace Jellyfin.Extensions.Json.Converters
             => WriteInternal(writer, value);
 
         internal static void WriteInternal(Utf8JsonWriter writer, Guid value)
-            => writer.WriteStringValue(value.ToString("N", CultureInfo.InvariantCulture));
+        {
+            // "N" format is always 32 chars; format on the stack instead of allocating a string per Guid.
+            // Item DTOs carry a dozen or more Guids each, so this runs many thousands of times per listing.
+            Span<char> buffer = stackalloc char[32];
+            value.TryFormat(buffer, out var written, "N");
+            writer.WriteStringValue(buffer[..written]);
+        }
     }
 }
