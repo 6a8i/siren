@@ -40,8 +40,9 @@ Regras aplicadas no servidor:
   família alcança tudo, o perfil fica com `EnableAllFolders = true`; senão, com `EnableAllFolders =
   false` e `EnabledFolders` = lista da família (∩ alcance de quem edita).
 - **Bloqueio por PIN.** Perfis criados pela API de famílias (inclusive o primeiro administrador de uma
-  família nova) nascem com `LoginAttemptsBeforeLockout = 5`; contas vinculadas mantêm o valor que já
-  tinham. Depois de 5 PINs errados o perfil é desativado (`IsLockedOut = true`). Editar o membro com
+  família nova) nascem com `LoginAttemptsBeforeLockout = 5`; contas vinculadas e perfis criados antes do bloqueio
+  existir recebem o mesmo 5 quando não têm limite (rotina `SetFamilyProfileLockout` na atualização);
+  um limite escolhido pelo administrador do servidor é mantido. Depois de 5 PINs errados o perfil é desativado (`IsLockedOut = true`). Editar o membro com
   `IsDisabled = false` reativa e zera `InvalidLoginAttemptCount` (é o desbloqueio); um administrador de
   família não desativa a si mesmo, mas desbloqueia qualquer perfil da família.
 - A família precisa manter ao menos um administrador de família quando quem edita é um

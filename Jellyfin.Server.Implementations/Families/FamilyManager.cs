@@ -226,6 +226,13 @@ public sealed class FamilyManager : IFamilyManager
 
         user.FamilyId = family.Id;
         user.CapToFamily(family);
+        // A PIN is only as safe as the number of guesses it allows: a user joining a family gets the
+        // family default unless the server administrator already chose a limit.
+        if (user.LoginAttemptsBeforeLockout is null or <= 0)
+        {
+            user.LoginAttemptsBeforeLockout = Family.LoginAttemptsBeforeLockout;
+        }
+
         await _userManager.UpdateUserAsync(user).ConfigureAwait(false);
     }
 

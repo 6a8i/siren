@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Data;
 using Jellyfin.Database.Implementations;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Database.Implementations.Locking;
 using Jellyfin.Database.Providers.Sqlite;
@@ -254,6 +255,7 @@ public sealed class FamilyManagerTests : IDisposable
         Assert.Equal(family.Id, after.FamilyId);
         Assert.False(after.HasPermission(PermissionKind.EnableAllFolders));
         Assert.Equal(new[] { a }, after.GetPreferenceValues<Guid>(PreferenceKind.EnabledFolders));
+        Assert.Equal(Family.LoginAttemptsBeforeLockout, after.LoginAttemptsBeforeLockout);
     }
 
     [Fact]
