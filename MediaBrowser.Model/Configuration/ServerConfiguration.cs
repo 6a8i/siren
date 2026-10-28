@@ -241,6 +241,13 @@ public class ServerConfiguration : BaseApplicationConfiguration
     public string[] CorsHosts { get; set; } = new[] { "*" };
 
     /// <summary>
+    /// Gets or sets a value indicating whether the browser security headers (X-Content-Type-Options,
+    /// Referrer-Policy, X-Frame-Options with a matching frame-ancestors policy and Permissions-Policy)
+    /// are sent with every response. Turn it off to embed the web client in a page on another origin.
+    /// </summary>
+    public bool EnableSecurityHeaders { get; set; } = true;
+
+    /// <summary>
     /// Gets or sets the number of days we should retain activity logs.
     /// </summary>
     public int? ActivityLogRetentionDays { get; set; } = 30;

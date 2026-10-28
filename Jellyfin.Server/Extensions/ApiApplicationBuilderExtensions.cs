@@ -70,6 +70,16 @@ namespace Jellyfin.Server.Extensions
         }
 
         /// <summary>
+        /// Adds the browser security headers to every response.
+        /// </summary>
+        /// <param name="appBuilder">The application builder.</param>
+        /// <returns>The updated application builder.</returns>
+        public static IApplicationBuilder UseSecurityHeaders(this IApplicationBuilder appBuilder)
+        {
+            return appBuilder.UseMiddleware<SecurityHeadersMiddleware>();
+        }
+
+        /// <summary>
         /// Enables url decoding before binding to the application pipeline.
         /// </summary>
         /// <param name="appBuilder">The <see cref="IApplicationBuilder"/>.</param>

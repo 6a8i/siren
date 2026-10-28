@@ -203,6 +203,9 @@ namespace Jellyfin.Server
                 // no longer pays for authentication (token and user lookups), static files or routing.
                 mainApp.UseIPBasedAccessValidation();
 
+                // Before static files, swagger and routing so every response carries the same headers.
+                mainApp.UseSecurityHeaders();
+
                 mainApp.UseWebSockets();
 
                 mainApp.UseResponseCompression();
