@@ -51,7 +51,7 @@ public sealed record CspViolationReport(
     /// </summary>
     /// <param name="utf8Json">The request body.</param>
     /// <returns>The reports found, possibly none.</returns>
-    public static List<CspViolationReport> Parse(ReadOnlyMemory<byte> utf8Json)
+    public static IReadOnlyList<CspViolationReport> Parse(ReadOnlyMemory<byte> utf8Json)
     {
         var reports = new List<CspViolationReport>(1);
         try
