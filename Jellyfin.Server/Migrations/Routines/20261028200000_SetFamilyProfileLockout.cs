@@ -36,7 +36,7 @@ internal class SetFamilyProfileLockout : IDatabaseMigrationRoutine
     {
         using var context = _provider.CreateDbContext();
         var updated = context.Users
-            .Where(user => user.FamilyId != null && (user.LoginAttemptsBeforeLockout == null || user.LoginAttemptsBeforeLockout <= 0))
+            .Where(user => user.FamilyId.HasValue && (user.LoginAttemptsBeforeLockout == null || user.LoginAttemptsBeforeLockout <= 0))
             .ExecuteUpdate(setters => setters.SetProperty(user => user.LoginAttemptsBeforeLockout, Family.LoginAttemptsBeforeLockout));
 
         _logger.LogInformation("Set the PIN lockout limit on {Count} family profiles that had none", updated);
