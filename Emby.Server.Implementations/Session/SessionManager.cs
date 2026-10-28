@@ -1588,25 +1588,71 @@ namespace Emby.Server.Implementations.Session
 
             var controllingUserId = controllingSession.UserId;
 
-            // Controlling a session is always allowed when:
-            // - the caller has no associated user (an API key, which is a privileged context),
-            // - the target session is public (has no owning user), or
-            // - the caller's user is associated with the target session.
-            // Controlling a session owned by a different user requires the
-            // EnableRemoteControlOfOtherUsers permission.
-            if (controllingUserId.IsEmpty()
-                || session.UserId.IsEmpty()
-                || session.ContainsUser(controllingUserId))
+            // A caller with no associated user (an API key) is a privileged context.
+            if (controllingUserId.IsEmpty())
             {
                 return;
             }
 
             var controllingUser = _userManager.GetUserById(controllingUserId);
-            if (controllingUser is null
-                || !controllingUser.HasPermission(PermissionKind.EnableRemoteControlOfOtherUsers))
+            if (controllingUser is null || !CanControl(session, controllingUser))
             {
-                throw new SecurityException("The current user does not have permission to remote control other users.");
+                throw new SecurityException("The current user does not have permission to remote control this session.");
             }
+        }
+
+        /// <summary>
+        /// Whether a user may control a session: their own sessions and sessions without a user always;
+        /// another user's session only with the EnableRemoteControlOfOtherUsers permission, and then
+        /// only inside the user's family unless they are a server administrator.
+        /// </summary>
+        private bool CanControl(SessionInfo session, User controllingUser)
+        {
+            if (session.UserId.IsEmpty() || session.ContainsUser(controllingUser.Id))
+            {
+                return true;
+            }
+
+            if (!controllingUser.HasPermission(PermissionKind.EnableRemoteControlOfOtherUsers))
+            {
+                return false;
+            }
+
+            return controllingUser.HasPermission(PermissionKind.IsAdministrator) || IsFamilySession(session, controllingUser);
+        }
+
+        /// <summary>
+        /// Whether a session belongs to a user's family: its user or one of its additional users has the
+        /// same family as <paramref name="user"/>. Users outside any family count as one group, so for
+        /// them this matches the sessions of other users outside any family.
+        /// </summary>
+        private bool IsFamilySession(SessionInfo session, User user)
+        {
+            if (IsInFamilyOf(session.UserId, user))
+            {
+                return true;
+            }
+
+            foreach (var additionalUser in session.AdditionalUsers)
+            {
+                if (IsInFamilyOf(additionalUser.UserId, user))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsInFamilyOf(Guid userId, User user)
+        {
+            if (userId.IsEmpty())
+            {
+                return false;
+            }
+
+            var other = userId.Equals(user.Id) ? user : _userManager.GetUserById(userId);
+            return other is not null && Nullable.Equals(other.FamilyId, user.FamilyId);
         }
 
         private void AssertCanAttachUser(SessionInfo controllingSession, Guid userId)
@@ -2115,6 +2161,7 @@ namespace Emby.Server.Implementations.Session
 
             var userCanControlOthers = false;
             var userIsAdmin = false;
+            var userSeesFamily = false;
             User user = null;
 
             if (isApiKey)
@@ -2129,6 +2176,11 @@ namespace Emby.Server.Implementations.Session
                 {
                     userCanControlOthers = user.HasPermission(PermissionKind.EnableRemoteControlOfOtherUsers);
                     userIsAdmin = user.HasPermission(PermissionKind.IsAdministrator);
+
+                    // A family administrator, or a family member allowed to control other users, sees the
+                    // sessions of their family. Nobody sees another family.
+                    userSeesFamily = user.FamilyId is not null
+                        && (userCanControlOthers || user.HasPermission(PermissionKind.IsFamilyAdministrator));
                 }
                 else
                 {
@@ -2157,6 +2209,11 @@ namespace Emby.Server.Implementations.Session
                     // User cannot control other user's sessions, validate user id.
                     result = result.Where(i => i.UserId.IsEmpty() || i.ContainsUser(userId));
                 }
+                else if (!userIsAdmin)
+                {
+                    // Controlling other users only reaches the user's own family.
+                    result = result.Where(i => i.UserId.IsEmpty() || i.ContainsUser(userId) || IsFamilySession(i, user));
+                }
 
                 result = result.Where(i =>
                 {
@@ -2172,6 +2229,11 @@ namespace Emby.Server.Implementations.Session
 
                     return string.IsNullOrWhiteSpace(i.DeviceId) || _deviceManager.CanAccessDevice(user, i.DeviceId);
                 });
+            }
+            else if (userSeesFamily)
+            {
+                // Request is from a family administrator (or a family member who may control others): limit to the family.
+                result = result.Where(i => i.UserId.IsEmpty() || i.ContainsUser(userId) || IsFamilySession(i, user));
             }
             else if (!userIsAdmin)
             {
@@ -2200,6 +2262,26 @@ namespace Emby.Server.Implementations.Session
             }
 
             return result.Select(ToSessionInfoDto).ToList();
+        }
+
+        /// <inheritdoc />
+        public bool CanControlSession(Guid callerUserId, bool isApiKey, string sessionId)
+        {
+            CheckDisposed();
+
+            var session = GetSessionToRemoteControl(sessionId);
+            if (isApiKey)
+            {
+                return true;
+            }
+
+            if (callerUserId.IsEmpty())
+            {
+                return false;
+            }
+
+            var caller = _userManager.GetUserById(callerUserId);
+            return caller is not null && CanControl(session, caller);
         }
 
         /// <inheritdoc />

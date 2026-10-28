@@ -1,7 +1,10 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Jellyfin.Data;
 using Jellyfin.Data.Events;
+using Jellyfin.Database.Implementations.Enums;
+using MediaBrowser.Controller.Authentication;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Model.Session;
 using MediaBrowser.Model.Tasks;
@@ -68,6 +71,23 @@ public class ScheduledTasksWebSocketListener : BasePeriodicWebSocketListener<IEn
         }
 
         await base.DisposeAsyncCore().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Starts sending messages over a scheduled tasks web socket. Like the ScheduledTasks API, this is
+    /// dashboard material and stays with server administrators.
+    /// </summary>
+    /// <param name="message">The message.</param>
+    protected override void Start(WebSocketMessageInfo message)
+    {
+        if (!message.Connection.AuthorizationInfo.IsApiKey
+            && (message.Connection.AuthorizationInfo.User is null
+                || !message.Connection.AuthorizationInfo.User.HasPermission(PermissionKind.IsAdministrator)))
+        {
+            throw new AuthenticationException("Only admin users can retrieve the scheduled tasks.");
+        }
+
+        base.Start(message);
     }
 
     private void OnTaskCompleted(object? sender, TaskCompletionEventArgs e)

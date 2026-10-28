@@ -42,7 +42,9 @@ public class SessionController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Gets a list of sessions.
+    /// Gets a list of sessions. A server administrator (or API key) gets every session; a family
+    /// administrator, or a family member allowed to control other users, gets the sessions of their
+    /// family; anyone else gets only their own.
     /// </summary>
     /// <param name="controllableByUserId">Filter by sessions that a given user is allowed to remote control.</param>
     /// <param name="deviceId">Filter by device Id.</param>
@@ -76,16 +78,23 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="itemId">The Id of the item.</param>
     /// <param name="itemName">The name of the item.</param>
     /// <response code="204">Instruction sent to session.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/{sessionId}/Viewing")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> DisplayContent(
         [FromRoute, Required] string sessionId,
         [FromQuery, Required] BaseItemKind itemType,
         [FromQuery, Required] string itemId,
         [FromQuery, Required] string itemName)
     {
+        if (AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         var command = new BrowseRequest
         {
             ItemId = itemId,
@@ -115,10 +124,12 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="subtitleStreamIndex">Optional. The index of the subtitle stream to play.</param>
     /// <param name="startIndex">Optional. The start index.</param>
     /// <response code="204">Instruction sent to session.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/{sessionId}/Playing")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> Play(
         [FromRoute, Required] string sessionId,
         [FromQuery, Required] PlayCommand playCommand,
@@ -129,6 +140,11 @@ public class SessionController : BaseJellyfinApiController
         [FromQuery] int? subtitleStreamIndex,
         [FromQuery] int? startIndex)
     {
+        if (AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         var playRequest = new PlayRequest
         {
             ItemIds = itemIds,
@@ -158,16 +174,23 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="seekPositionTicks">The optional position ticks.</param>
     /// <param name="controllingUserId">The optional controlling user id.</param>
     /// <response code="204">Playstate command sent to session.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/{sessionId}/Playing/{command}")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> SendPlaystateCommand(
         [FromRoute, Required] string sessionId,
         [FromRoute, Required] PlaystateCommand command,
         [FromQuery] long? seekPositionTicks,
         [FromQuery] string? controllingUserId)
     {
+        if (AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         await _sessionManager.SendPlaystateCommand(
             await RequestHelpers.GetSessionId(_sessionManager, _userManager, HttpContext).ConfigureAwait(false),
             sessionId,
@@ -189,14 +212,21 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="sessionId">The session id.</param>
     /// <param name="command">The command to send.</param>
     /// <response code="204">System command sent to session.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/{sessionId}/System/{command}")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> SendSystemCommand(
         [FromRoute, Required] string sessionId,
         [FromRoute, Required] GeneralCommandType command)
     {
+        if (AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         var currentSession = await RequestHelpers.GetSession(_sessionManager, _userManager, HttpContext).ConfigureAwait(false);
         var generalCommand = new GeneralCommand
         {
@@ -215,14 +245,21 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="sessionId">The session id.</param>
     /// <param name="command">The command to send.</param>
     /// <response code="204">General command sent to session.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/{sessionId}/Command/{command}")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> SendGeneralCommand(
         [FromRoute, Required] string sessionId,
         [FromRoute, Required] GeneralCommandType command)
     {
+        if (AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         var currentSession = await RequestHelpers.GetSession(_sessionManager, _userManager, HttpContext).ConfigureAwait(false);
 
         var generalCommand = new GeneralCommand
@@ -243,14 +280,21 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="sessionId">The session id.</param>
     /// <param name="command">The <see cref="GeneralCommand"/>.</param>
     /// <response code="204">Full general command sent to session.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/{sessionId}/Command")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> SendFullGeneralCommand(
         [FromRoute, Required] string sessionId,
         [FromBody, Required] GeneralCommand command)
     {
+        if (AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         var currentSession = await RequestHelpers.GetSession(_sessionManager, _userManager, HttpContext).ConfigureAwait(false);
 
         ArgumentNullException.ThrowIfNull(command);
@@ -273,14 +317,21 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="sessionId">The session id.</param>
     /// <param name="command">The <see cref="MessageCommand" /> object containing Header, Message Text, and TimeoutMs.</param>
     /// <response code="204">Message sent.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/{sessionId}/Message")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> SendMessageCommand(
         [FromRoute, Required] string sessionId,
         [FromBody, Required] MessageCommand command)
     {
+        if (AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         if (string.IsNullOrWhiteSpace(command.Header))
         {
             command.Header = "Message from Server";
@@ -302,14 +353,21 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="sessionId">The session id.</param>
     /// <param name="userId">The user id.</param>
     /// <response code="204">User added to session.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/{sessionId}/User/{userId}")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> AddUserToSession(
         [FromRoute, Required] string sessionId,
         [FromRoute, Required] Guid userId)
     {
+        if (AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         _sessionManager.AddAdditionalUser(
             await RequestHelpers.GetSessionId(_sessionManager, _userManager, HttpContext).ConfigureAwait(false),
             sessionId,
@@ -323,14 +381,21 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="sessionId">The session id.</param>
     /// <param name="userId">The user id.</param>
     /// <response code="204">User removed from session.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpDelete("Sessions/{sessionId}/User/{userId}")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> RemoveUserFromSession(
         [FromRoute, Required] string sessionId,
         [FromRoute, Required] Guid userId)
     {
+        if (AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
+
         _sessionManager.RemoveAdditionalUser(
             await RequestHelpers.GetSessionId(_sessionManager, _userManager, HttpContext).ConfigureAwait(false),
             sessionId,
@@ -347,10 +412,12 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="supportsMediaControl">Determines whether media can be played remotely..</param>
     /// <param name="supportsPersistentIdentifier">Determines whether the device supports a unique identifier.</param>
     /// <response code="204">Capabilities posted.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/Capabilities")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> PostCapabilities(
         [FromQuery] string? id,
         [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder))] MediaType[] playableMediaTypes,
@@ -362,6 +429,10 @@ public class SessionController : BaseJellyfinApiController
         if (string.IsNullOrWhiteSpace(id))
         {
             id = currentSessionId;
+        }
+        else if (AssertCanControlSession(id) is { } forbidden)
+        {
+            return forbidden;
         }
 
         _sessionManager.ReportCapabilities(currentSessionId, id, new ClientCapabilities
@@ -380,10 +451,12 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="id">The session id.</param>
     /// <param name="capabilities">The <see cref="ClientCapabilities"/>.</param>
     /// <response code="204">Capabilities updated.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/Capabilities/Full")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> PostFullCapabilities(
         [FromQuery] string? id,
         [FromBody, Required] ClientCapabilitiesDto capabilities)
@@ -392,6 +465,10 @@ public class SessionController : BaseJellyfinApiController
         if (string.IsNullOrWhiteSpace(id))
         {
             id = currentSessionId;
+        }
+        else if (AssertCanControlSession(id) is { } forbidden)
+        {
+            return forbidden;
         }
 
         _sessionManager.ReportCapabilities(currentSessionId, id, capabilities.ToClientCapabilities());
@@ -405,15 +482,21 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="sessionId">The session id.</param>
     /// <param name="itemId">The item id.</param>
     /// <response code="204">Session reported to server.</response>
+    /// <response code="403">The current user may not control the session.</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPost("Sessions/Viewing")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult> ReportViewing(
         [FromQuery] string? sessionId,
         [FromQuery, Required] string? itemId)
     {
         var currentSessionId = await RequestHelpers.GetSessionId(_sessionManager, _userManager, HttpContext).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(sessionId) && AssertCanControlSession(sessionId) is { } forbidden)
+        {
+            return forbidden;
+        }
 
         _sessionManager.ReportNowViewingItem(currentSessionId, sessionId ?? currentSessionId, itemId);
         return NoContent();
@@ -459,5 +542,22 @@ public class SessionController : BaseJellyfinApiController
     public ActionResult<IEnumerable<NameIdPair>> GetPasswordResetProviders()
     {
         return _userManager.GetPasswordResetProviders();
+    }
+
+    /// <summary>
+    /// Refuses the request when the caller may not control a session: a server administrator or an API
+    /// key controls any session, a user their own sessions and, with the permission to control other
+    /// users, the sessions of their family. Unknown session ids surface as 404 from the session manager.
+    /// </summary>
+    /// <param name="sessionId">The session id.</param>
+    /// <returns><c>null</c> when the caller may control the session; otherwise the 403 result to return.</returns>
+    private ActionResult? AssertCanControlSession(string sessionId)
+    {
+        if (_sessionManager.CanControlSession(User.GetUserId(), User.GetIsApiKey(), sessionId))
+        {
+            return null;
+        }
+
+        return StatusCode(StatusCodes.Status403Forbidden, "The current user may not control this session.");
     }
 }

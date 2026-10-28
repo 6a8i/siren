@@ -310,6 +310,19 @@ namespace MediaBrowser.Controller.Session
         IReadOnlyList<SessionInfoDto> GetSessions(Guid userId, string deviceId, int? activeWithinSeconds, Guid? controllableUserToCheck, bool isApiKey);
 
         /// <summary>
+        /// Checks whether a caller may remote control a session. An API key may control any session;
+        /// a user may control their own sessions and sessions without a user, and with the
+        /// <c>EnableRemoteControlOfOtherUsers</c> permission the sessions of users in the same family
+        /// (users outside any family count as one group), or any session if they are a server administrator.
+        /// </summary>
+        /// <param name="callerUserId">The user id of the caller, or <see cref="Guid.Empty"/> for an API key.</param>
+        /// <param name="isApiKey">Whether the request is authenticated with an API key.</param>
+        /// <param name="sessionId">The session id.</param>
+        /// <returns><c>true</c> if the caller may control the session; otherwise, <c>false</c>.</returns>
+        /// <exception cref="MediaBrowser.Common.Extensions.ResourceNotFoundException">No session has that id.</exception>
+        bool CanControlSession(Guid callerUserId, bool isApiKey, string sessionId);
+
+        /// <summary>
         /// Gets the session by authentication token.
         /// </summary>
         /// <param name="token">The token.</param>

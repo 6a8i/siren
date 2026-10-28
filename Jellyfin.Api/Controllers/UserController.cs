@@ -618,22 +618,7 @@ public class UserController : BaseJellyfinApiController
     /// What the caller may see: a server administrator (or API key) sees everyone, a family member
     /// sees their family, anyone else sees only themselves.
     /// </summary>
-    private Func<User, bool>? GetCallerScope()
-    {
-        if (User.IsInRole(UserRoles.Administrator))
-        {
-            return null;
-        }
-
-        var callerId = User.GetUserId();
-        var caller = callerId.IsEmpty() ? null : _userManager.GetUserById(callerId);
-        if (caller?.FamilyId is { } familyId)
-        {
-            return user => user.FamilyId.Equals(familyId);
-        }
-
-        return user => user.Id.Equals(callerId);
-    }
+    private Func<User, bool>? GetCallerScope() => RequestHelpers.GetUserScope(User, _userManager);
 
     /// <summary>
     /// The families with a profile signed in on the requesting device, so a shared screen can list

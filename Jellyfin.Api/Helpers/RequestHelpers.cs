@@ -112,6 +112,51 @@ public static class RequestHelpers
     }
 
     /// <summary>
+    /// Gets what the caller may see of other users: <c>null</c> for a server administrator or an API key,
+    /// who see everyone; otherwise a filter that accepts the caller's family, or only the caller
+    /// themselves outside a family.
+    /// </summary>
+    /// <param name="claimsPrincipal">The <see cref="ClaimsPrincipal"/> for the current request.</param>
+    /// <param name="userManager">The user manager.</param>
+    /// <returns>The filter, or <c>null</c> when every user is visible.</returns>
+    internal static Func<User, bool>? GetUserScope(ClaimsPrincipal claimsPrincipal, IUserManager userManager)
+    {
+        if (claimsPrincipal.IsInRole(UserRoles.Administrator))
+        {
+            return null;
+        }
+
+        var callerId = claimsPrincipal.GetUserId();
+        var caller = callerId.IsEmpty() ? null : userManager.GetUserById(callerId);
+        if (caller?.FamilyId is { } familyId)
+        {
+            return user => user.FamilyId.Equals(familyId);
+        }
+
+        return user => user.Id.Equals(callerId);
+    }
+
+    /// <summary>
+    /// Checks whether the caller may see a user: a server administrator or an API key sees everyone, a
+    /// family member their family, anyone else only themselves. An unknown user is not visible.
+    /// </summary>
+    /// <param name="claimsPrincipal">The <see cref="ClaimsPrincipal"/> for the current request.</param>
+    /// <param name="userManager">The user manager.</param>
+    /// <param name="userId">The id of the user to see.</param>
+    /// <returns>A <see cref="bool"/> whether the caller may see the user.</returns>
+    internal static bool CanSeeUser(ClaimsPrincipal claimsPrincipal, IUserManager userManager, Guid userId)
+    {
+        var scope = GetUserScope(claimsPrincipal, userManager);
+        if (scope is null)
+        {
+            return true;
+        }
+
+        var user = userManager.GetUserById(userId);
+        return user is not null && scope(user);
+    }
+
+    /// <summary>
     /// Get the session based on http request.
     /// </summary>
     /// <param name="sessionManager">The session manager.</param>

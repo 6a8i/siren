@@ -69,12 +69,14 @@ public class PlaylistsController : BaseJellyfinApiController
     /// <param name="mediaType">The media type.</param>
     /// <param name="createPlaylistRequest">The create playlist payload.</param>
     /// <response code="200">Playlist created.</response>
+    /// <response code="403">The playlist would be shared with a user outside the caller's family.</response>
     /// <returns>
     /// A <see cref="Task" /> that represents the asynchronous operation to create a playlist.
     /// The task result contains an <see cref="OkResult"/> indicating success.
     /// </returns>
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<PlaylistCreationResult>> CreatePlaylist(
         [FromQuery, ParameterObsolete] string? name,
         [FromQuery, ModelBinder(typeof(CommaDelimitedCollectionModelBinder)), ParameterObsolete] IReadOnlyList<Guid> ids,
@@ -89,6 +91,11 @@ public class PlaylistsController : BaseJellyfinApiController
 
         userId ??= createPlaylistRequest?.UserId ?? default;
         userId = RequestHelpers.GetUserId(User, userId);
+        if (createPlaylistRequest?.Users.Any(share => !RequestHelpers.CanSeeUser(User, _userManager, share.UserId)) == true)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, "A playlist can only be shared with users of your family.");
+        }
+
         var result = await _playlistManager.CreatePlaylist(new PlaylistCreationRequest
         {
             Name = name ?? createPlaylistRequest?.Name,
@@ -138,6 +145,14 @@ public class PlaylistsController : BaseJellyfinApiController
             return Forbid();
         }
 
+        // New shares stay inside the caller's family; shares that already exist are not re-checked.
+        if (updatePlaylistRequest.Users is { } users
+            && users.Any(share => playlist.Shares.All(s => !s.UserId.Equals(share.UserId))
+                && !RequestHelpers.CanSeeUser(User, _userManager, share.UserId)))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, "A playlist can only be shared with users of your family.");
+        }
+
         await _playlistManager.UpdatePlaylist(new PlaylistUpdateRequest
         {
             UserId = callingUserId,
@@ -176,7 +191,7 @@ public class PlaylistsController : BaseJellyfinApiController
 
         return new PlaylistDto()
         {
-            Shares = playlist.Shares,
+            Shares = GetVisibleShares(playlist),
             OpenAccess = playlist.OpenAccess,
             ItemIds = playlist.GetManageableItems().Select(t => t.Item2.Id).ToList()
         };
@@ -209,7 +224,7 @@ public class PlaylistsController : BaseJellyfinApiController
 
         var isPermitted = playlist.OwnerUserId.Equals(userId);
 
-        return isPermitted ? playlist.Shares.ToList() : Forbid();
+        return isPermitted ? GetVisibleShares(playlist) : Forbid();
     }
 
     /// <summary>
@@ -237,6 +252,11 @@ public class PlaylistsController : BaseJellyfinApiController
         if (playlist is null)
         {
             return NotFound("Playlist not found");
+        }
+
+        if (!RequestHelpers.CanSeeUser(User, _userManager, userId))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, "Users outside your family are not visible.");
         }
 
         if (playlist.OwnerUserId.Equals(callingUserId))
@@ -298,6 +318,11 @@ public class PlaylistsController : BaseJellyfinApiController
             return Forbid();
         }
 
+        if (!RequestHelpers.CanSeeUser(User, _userManager, userId))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, "A playlist can only be shared with users of your family.");
+        }
+
         await _playlistManager.AddUserToShares(new PlaylistUserUpdateRequest
         {
             Id = playlistId,
@@ -344,8 +369,9 @@ public class PlaylistsController : BaseJellyfinApiController
             return Forbid();
         }
 
+        // A share with a user the caller may not see is not there for them either.
         var share = playlist.Shares.FirstOrDefault(s => s.UserId.Equals(userId));
-        if (share is null)
+        if (share is null || !RequestHelpers.CanSeeUser(User, _userManager, userId))
         {
             return NotFound("User permissions not found");
         }
@@ -566,4 +592,10 @@ public class PlaylistsController : BaseJellyfinApiController
 
         return result;
     }
+
+    /// <summary>
+    /// The shares of a playlist with the users the caller may see, so a playlist never reveals another family.
+    /// </summary>
+    private List<PlaylistUserPermissions> GetVisibleShares(Playlist playlist)
+        => playlist.Shares.Where(share => RequestHelpers.CanSeeUser(User, _userManager, share.UserId)).ToList();
 }

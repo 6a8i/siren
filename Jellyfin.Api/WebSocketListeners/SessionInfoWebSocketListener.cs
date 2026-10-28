@@ -61,18 +61,16 @@ public class SessionInfoWebSocketListener : BasePeriodicWebSocketListener<IEnume
     /// <inheritdoc />
     protected override Task<IEnumerable<SessionInfoDto>> GetDataToSendForConnection(IWebSocketConnection connection)
     {
-        var sessions = _sessionManager.Sessions;
+        var auth = connection.AuthorizationInfo;
 
-        // For non-admin users, filter the sessions to only include their own sessions
-        if (connection.AuthorizationInfo?.User is not null &&
-            !connection.AuthorizationInfo.IsApiKey &&
-            !connection.AuthorizationInfo.User.HasPermission(PermissionKind.IsAdministrator))
+        // A non-admin user gets what GET /Sessions gives them: their own sessions and, for a family
+        // administrator or a family member allowed to control other users, those of their family.
+        if (auth?.User is not null && !auth.IsApiKey && !auth.User.HasPermission(PermissionKind.IsAdministrator))
         {
-            var userId = connection.AuthorizationInfo.User.Id;
-            sessions = sessions.Where(s => s.UserId.Equals(userId) || s.ContainsUser(userId));
+            return Task.FromResult<IEnumerable<SessionInfoDto>>(_sessionManager.GetSessions(auth.User.Id, null, null, null, false));
         }
 
-        return Task.FromResult(sessions.Select(_sessionManager.ToSessionInfoDto));
+        return Task.FromResult(_sessionManager.Sessions.Select(_sessionManager.ToSessionInfoDto));
     }
 
     /// <inheritdoc />
