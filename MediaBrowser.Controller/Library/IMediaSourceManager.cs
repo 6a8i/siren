@@ -39,6 +39,14 @@ namespace MediaBrowser.Controller.Library
         IReadOnlyList<MediaStream> GetMediaStreams(MediaStreamQuery query);
 
         /// <summary>
+        /// Gets the subset of <paramref name="itemIds"/> that have at least one stream of the given type.
+        /// </summary>
+        /// <param name="itemIds">The item ids to check.</param>
+        /// <param name="mediaStreamType">The type of the media stream.</param>
+        /// <returns>The ids of the items that have such a stream.</returns>
+        IReadOnlySet<Guid> GetItemIdsWithStreamType(IReadOnlyList<Guid> itemIds, MediaStreamType mediaStreamType);
+
+        /// <summary>
         /// Gets the media attachments.
         /// </summary>
         /// <param name="itemId">The item identifier.</param>

@@ -102,68 +102,86 @@ public class ChapterImagesTask : IScheduledTask
 
         var failHistoryPath = Path.Combine(_appPaths.CachePath, "chapter-failures.txt");
 
-        List<string> previouslyFailedImages;
+        // A set, not a list: the membership check runs once per video and the list made it quadratic.
+        var previouslyFailedImages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         if (File.Exists(failHistoryPath))
         {
             try
             {
-                previouslyFailedImages = (await File.ReadAllTextAsync(failHistoryPath, cancellationToken).ConfigureAwait(false))
-                    .Split('|', StringSplitOptions.RemoveEmptyEntries)
-                    .ToList();
+                previouslyFailedImages.UnionWith((await File.ReadAllTextAsync(failHistoryPath, cancellationToken).ConfigureAwait(false))
+                    .Split('|', StringSplitOptions.RemoveEmptyEntries));
             }
             catch (IOException)
             {
-                previouslyFailedImages = [];
+                // Start with an empty history.
             }
-        }
-        else
-        {
-            previouslyFailedImages = [];
         }
 
         var directoryService = new DirectoryService(_fileSystem);
+        var failHistoryChanged = false;
 
-        foreach (var video in videos)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var key = video.Path + video.DateModified.Ticks;
-
-            var extract = !previouslyFailedImages.Contains(key, StringComparison.OrdinalIgnoreCase);
-
-            try
+            foreach (var video in videos)
             {
-                var chapters = _chapterManager.GetChapters(video.Id);
+                cancellationToken.ThrowIfCancellationRequested();
 
-                var success = await _chapterManager.RefreshChapterImages(video, directoryService, chapters, extract, true, cancellationToken).ConfigureAwait(false);
+                var key = video.Path + video.DateModified.Ticks;
 
-                if (!success)
+                var extract = !previouslyFailedImages.Contains(key);
+
+                try
                 {
-                    previouslyFailedImages.Add(key);
+                    var chapters = _chapterManager.GetChapters(video.Id);
 
-                    var parentPath = Path.GetDirectoryName(failHistoryPath);
-                    if (parentPath is not null)
+                    var success = await _chapterManager.RefreshChapterImages(video, directoryService, chapters, extract, true, cancellationToken).ConfigureAwait(false);
+
+                    if (!success && previouslyFailedImages.Add(key))
                     {
-                        Directory.CreateDirectory(parentPath);
+                        failHistoryChanged = true;
                     }
 
-                    string text = string.Join('|', previouslyFailedImages);
-                    await File.WriteAllTextAsync(failHistoryPath, text, cancellationToken).ConfigureAwait(false);
+                    numComplete++;
+                    double percent = numComplete;
+                    percent /= videos.Count;
+
+                    progress.Report(100 * percent);
                 }
-
-                numComplete++;
-                double percent = numComplete;
-                percent /= videos.Count;
-
-                progress.Report(100 * percent);
+                catch (ObjectDisposedException ex)
+                {
+                    // TODO Investigate and properly fix.
+                    _logger.LogError(ex, "Object Disposed");
+                    break;
+                }
             }
-            catch (ObjectDisposedException ex)
+        }
+        finally
+        {
+            // Write the failure history once at the end (also on cancellation) instead of rewriting the
+            // whole file after every new failure.
+            if (failHistoryChanged)
             {
-                // TODO Investigate and properly fix.
-                _logger.LogError(ex, "Object Disposed");
-                break;
+                await SaveFailHistoryAsync(failHistoryPath, previouslyFailedImages).ConfigureAwait(false);
             }
+        }
+    }
+
+    private async Task SaveFailHistoryAsync(string failHistoryPath, IEnumerable<string> failedImages)
+    {
+        try
+        {
+            var parentPath = Path.GetDirectoryName(failHistoryPath);
+            if (parentPath is not null)
+            {
+                Directory.CreateDirectory(parentPath);
+            }
+
+            await File.WriteAllTextAsync(failHistoryPath, string.Join('|', failedImages), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogWarning(ex, "Unable to save the chapter image failure history to {Path}", failHistoryPath);
         }
     }
 }

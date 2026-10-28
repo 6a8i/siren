@@ -56,6 +56,25 @@ public class MediaStreamRepository : IMediaStreamRepository
     }
 
     /// <inheritdoc />
+    public IReadOnlySet<Guid> GetItemIdsWithStreamType(IReadOnlyList<Guid> itemIds, MediaStreamType mediaStreamType)
+    {
+        if (itemIds.Count == 0)
+        {
+            return ImmutableHashSet<Guid>.Empty;
+        }
+
+        using var context = _dbProvider.CreateDbContext();
+        var streamType = (MediaStreamTypeEntity)mediaStreamType;
+        return context.MediaStreamInfos
+            .AsNoTracking()
+            .WhereOneOrMany(itemIds, e => e.ItemId)
+            .Where(e => e.StreamType == streamType)
+            .Select(e => e.ItemId)
+            .Distinct()
+            .ToHashSet();
+    }
+
+    /// <inheritdoc />
     public IReadOnlyList<string> GetMediaStreamLanguages(MediaStreamType mediaStreamType)
     {
         using var context = _dbProvider.CreateDbContext();

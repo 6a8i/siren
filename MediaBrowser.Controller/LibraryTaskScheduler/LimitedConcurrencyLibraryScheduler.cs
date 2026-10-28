@@ -292,9 +292,28 @@ public sealed class LimitedConcurrencyLibraryScheduler : ILimitedConcurrencyLibr
 
         TaskQueueItem[] workItems = null!;
 
-        void UpdateProgress()
+        // Keep a running total instead of averaging every item on every report: with tens of thousands of
+        // items in one folder the average made progress reporting quadratic in the folder size.
+        var progressLock = new Lock();
+        var progressSum = 0d;
+        var lastReportedPercent = -1d;
+
+        void UpdateProgress(double delta)
         {
-            progress.Report(workItems.Select(e => e.ProgressValue).Average());
+            double percent;
+            lock (progressLock)
+            {
+                progressSum += delta;
+                percent = Math.Round(progressSum / workItems.Length);
+                if (percent == lastReportedPercent)
+                {
+                    return;
+                }
+
+                lastReportedPercent = percent;
+            }
+
+            progress.Report(percent);
         }
 
         workItems = data.Select(item =>
@@ -309,8 +328,9 @@ public sealed class LimitedConcurrencyLibraryScheduler : ILimitedConcurrencyLibr
                         var innerPercentRounded = Math.Round(innerPercent);
                         if (queueItem.ProgressValue != innerPercentRounded)
                         {
+                            var delta = innerPercentRounded - queueItem.ProgressValue;
                             queueItem.ProgressValue = innerPercentRounded;
-                            UpdateProgress();
+                            UpdateProgress(delta);
                         }
                     }),
                 Worker = (val) => worker((T)val, queueItem.Progress),

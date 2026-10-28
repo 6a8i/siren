@@ -111,6 +111,10 @@ namespace Emby.Server.Implementations.Library
             return list;
         }
 
+        /// <inheritdoc />
+        public IReadOnlySet<Guid> GetItemIdsWithStreamType(IReadOnlyList<Guid> itemIds, MediaStreamType mediaStreamType)
+            => _mediaStreamRepository.GetItemIdsWithStreamType(itemIds, mediaStreamType);
+
         private static bool StreamSupportsExternalStream(MediaStream stream)
         {
             if (stream.IsExternal)

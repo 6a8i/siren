@@ -63,6 +63,18 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
         private readonly AsyncNonKeyedLocker _thumbnailResourcePool;
 
+        /// <summary>
+        /// Bounds the number of concurrent ffprobe processes. Scans, playback and live TV each probe on
+        /// their own, and nothing else limited them.
+        /// </summary>
+        private readonly AsyncNonKeyedLocker _probeResourcePool = new(Math.Clamp(Environment.ProcessorCount, 2, 8));
+
+        /// <summary>
+        /// Upper bound for a single probe, so a hung read (an unreachable network share) does not hold a
+        /// scan worker forever.
+        /// </summary>
+        private static readonly TimeSpan _probeTimeout = TimeSpan.FromMinutes(2);
+
         private readonly Lock _runningProcessesLock = new();
         private readonly List<ProcessWrapper> _runningProcesses = new List<ProcessWrapper>();
 
@@ -543,13 +555,27 @@ namespace MediaBrowser.MediaEncoding.Encoder
 
             _logger.LogDebug("Starting {ProcessFileName} with args {ProcessArgs}", _ffprobePath, args);
 
+            using var probeSlot = await _probeResourcePool.LockAsync(cancellationToken).ConfigureAwait(false);
+            using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutSource.CancelAfter(_probeTimeout);
+            var probeToken = timeoutSource.Token;
+
             var memoryStream = new MemoryStream();
             await using (memoryStream.ConfigureAwait(false))
             using (var processWrapper = new ProcessWrapper(process, this))
             {
                 StartProcess(processWrapper);
                 using var reader = process.StandardOutput;
-                await reader.BaseStream.CopyToAsync(memoryStream, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await reader.BaseStream.CopyToAsync(memoryStream, probeToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    StopProcess(processWrapper, 100);
+                    throw new FfmpegException($"ffprobe did not finish within {_probeTimeout.TotalSeconds:0} seconds for {inputPath}");
+                }
+
                 memoryStream.Seek(0, SeekOrigin.Begin);
                 InternalMediaInfoResult result;
                 try

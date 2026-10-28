@@ -269,6 +269,15 @@ namespace Emby.Server.Implementations.Dto
                 }
             }
 
+            // Batch-detect which tracks carry a lyric stream: HasLyrics was one media-streams query per track,
+            // so an album or playlist page cost one round trip per song.
+            IReadOnlySet<Guid>? lyricItemIds = null;
+            var audioItemIds = accessibleItems.OfType<Audio>().Select(i => i.Id).ToList();
+            if (audioItemIds.Count > 0)
+            {
+                lyricItemIds = _mediaSourceManager.GetItemIdsWithStreamType(audioItemIds, MediaStreamType.Lyric);
+            }
+
             for (int index = 0; index < accessibleItems.Count; index++)
             {
                 var item = accessibleItems[index];
@@ -284,7 +293,8 @@ namespace Emby.Server.Implementations.Dto
                     artistsBatch,
                     resumeDataBatch?.GetValueOrDefault(item.Id),
                     peopleBatch,
-                    alternateVersionItemIds);
+                    alternateVersionItemIds,
+                    lyricItemIds);
 
                 if (item is LiveTvChannel tvChannel)
                 {
@@ -348,7 +358,8 @@ namespace Emby.Server.Implementations.Dto
             IReadOnlyDictionary<string, MusicArtist[]>? artistsBatch = null,
             VersionResumeData? resumeData = null,
             IReadOnlyDictionary<Guid, IReadOnlyList<PersonInfo>>? peopleBatch = null,
-            IReadOnlySet<Guid>? alternateVersionItemIds = null)
+            IReadOnlySet<Guid>? alternateVersionItemIds = null,
+            IReadOnlySet<Guid>? lyricItemIds = null)
         {
             var dto = new BaseItemDto
             {
@@ -458,7 +469,9 @@ namespace Emby.Server.Implementations.Dto
 
             if (item is Audio audio)
             {
-                dto.HasLyrics = audio.GetMediaStreams().Any(s => s.Type == MediaStreamType.Lyric);
+                dto.HasLyrics = lyricItemIds is not null
+                    ? lyricItemIds.Contains(audio.Id)
+                    : audio.GetMediaStreams().Any(s => s.Type == MediaStreamType.Lyric);
             }
 
             return dto;

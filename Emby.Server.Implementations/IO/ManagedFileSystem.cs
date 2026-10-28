@@ -257,7 +257,10 @@ namespace Emby.Server.Implementations.IO
                 {
                     result.CreationTimeUtc = GetCreationTimeUtc(info);
                     result.LastWriteTimeUtc = GetLastWriteTimeUtc(info);
-                    if (fileInfo.LinkTarget is not null)
+                    // LinkTarget is a readlink syscall (or a handle open on Windows) per file, and enumeration
+                    // does not cache it. The reparse point attribute is already populated, so only ask for
+                    // the target when the file can actually be a link.
+                    if ((info.Attributes & FileAttributes.ReparsePoint) != 0 && fileInfo.LinkTarget is not null)
                     {
                         try
                         {

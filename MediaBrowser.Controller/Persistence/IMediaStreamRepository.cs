@@ -29,6 +29,14 @@ public interface IMediaStreamRepository
     IReadOnlyList<string> GetMediaStreamLanguages(MediaStreamType mediaStreamType);
 
     /// <summary>
+    /// Gets the subset of <paramref name="itemIds"/> that have at least one stream of the given type.
+    /// </summary>
+    /// <param name="itemIds">The item ids to check.</param>
+    /// <param name="mediaStreamType">The type of the media stream.</param>
+    /// <returns>The ids of the items that have such a stream.</returns>
+    IReadOnlySet<Guid> GetItemIdsWithStreamType(IReadOnlyList<Guid> itemIds, MediaStreamType mediaStreamType);
+
+    /// <summary>
     /// Saves the media streams.
     /// </summary>
     /// <param name="id">The identifier.</param>

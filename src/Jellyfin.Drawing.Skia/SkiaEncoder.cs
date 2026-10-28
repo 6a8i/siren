@@ -361,11 +361,37 @@ public class SkiaEncoder : IImageEncoder
             throw new FileNotFoundException("File not found", path);
         }
 
+        // Paths with non-ASCII characters are copied to a temp file for Skia. Do that once per decode
+        // (not once per decode attempt) and always remove the copy; it used to be left behind.
+        var safePath = NormalizePath(path);
+        var isSafePathTemp = !string.Equals(safePath, path, StringComparison.Ordinal);
+        try
+        {
+            return DecodeCore(path, safePath, forceCleanBitmap, orientation, out origin);
+        }
+        finally
+        {
+            if (isSafePathTemp)
+            {
+                try
+                {
+                    File.Delete(safePath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Unable to remove temporary file '{TempPath}'", safePath);
+                }
+            }
+        }
+    }
+
+    private SKBitmap? DecodeCore(string path, string safePath, bool forceCleanBitmap, ImageOrientation? orientation, out SKEncodedOrigin origin)
+    {
         var requiresTransparencyHack = _transparentImageTypes.Contains(Path.GetExtension(path));
 
         if (requiresTransparencyHack || forceCleanBitmap)
         {
-            using SKCodec codec = SKCodec.Create(NormalizePath(path), out SKCodecResult res);
+            using SKCodec codec = SKCodec.Create(safePath, out SKCodecResult res);
             if (res != SKCodecResult.Success)
             {
                 origin = GetSKEncodedOrigin(orientation);
@@ -398,11 +424,11 @@ public class SkiaEncoder : IImageEncoder
             }
         }
 
-        var resultBitmap = SKBitmap.Decode(NormalizePath(path));
+        var resultBitmap = SKBitmap.Decode(safePath);
 
         if (resultBitmap is null)
         {
-            return Decode(path, true, orientation, out origin);
+            return DecodeCore(path, safePath, true, orientation, out origin);
         }
 
         try
@@ -412,7 +438,7 @@ public class SkiaEncoder : IImageEncoder
             {
                 using (resultBitmap)
                 {
-                    return Decode(path, true, orientation, out origin);
+                    return DecodeCore(path, safePath, true, orientation, out origin);
                 }
             }
 

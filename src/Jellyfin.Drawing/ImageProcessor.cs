@@ -42,6 +42,11 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
     private readonly IImageEncoder _imageEncoder;
 
     private readonly AsyncNonKeyedLocker _parallelEncodingLimit;
+    private readonly AsyncKeyedLocker<string> _cacheFileLocks = new(o =>
+    {
+        o.PoolSize = 20;
+        o.PoolInitialFill = 1;
+    });
 
     private bool _disposed;
 
@@ -196,17 +201,29 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
         {
             if (!File.Exists(cacheFilePath))
             {
-                string resultPath;
-
-                // Limit number of parallel (more precisely: concurrent) image encodings to prevent a high memory usage
-                using (await _parallelEncodingLimit.LockAsync().ConfigureAwait(false))
+                // One encode per cache file: concurrent requests for the same uncached image (a grid of
+                // posters opened by several clients) wait for the first one instead of all encoding it.
+                using (await _cacheFileLocks.LockAsync(cacheFilePath).ConfigureAwait(false))
                 {
-                    resultPath = _imageEncoder.EncodeImage(originalImagePath, dateModified, cacheFilePath, autoOrient, orientation, quality, options, outputFormat);
-                }
+                    if (!File.Exists(cacheFilePath))
+                    {
+                        string resultPath;
+                        // Encode into a temp file and move it into place, so a reader never sees a half-written cache file.
+                        var tempFilePath = cacheFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
-                if (string.Equals(resultPath, originalImagePath, StringComparison.OrdinalIgnoreCase))
-                {
-                    return (originalImagePath, MimeTypes.GetMimeType(originalImagePath), dateModified);
+                        // Limit number of parallel (more precisely: concurrent) image encodings to prevent a high memory usage
+                        using (await _parallelEncodingLimit.LockAsync().ConfigureAwait(false))
+                        {
+                            resultPath = _imageEncoder.EncodeImage(originalImagePath, dateModified, tempFilePath, autoOrient, orientation, quality, options, outputFormat);
+                        }
+
+                        if (string.Equals(resultPath, originalImagePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return (originalImagePath, MimeTypes.GetMimeType(originalImagePath), dateModified);
+                        }
+
+                        File.Move(tempFilePath, cacheFilePath, overwrite: true);
+                    }
                 }
             }
 

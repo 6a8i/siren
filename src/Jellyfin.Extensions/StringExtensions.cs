@@ -167,13 +167,19 @@ namespace Jellyfin.Extensions
             var cleaned = value.RemoveDiacritics().ToLowerInvariant();
 
             // Replace all punctuation and special characters with spaces
-            cleaned = Regex.Replace(cleaned, @"[^\p{L}\p{N}\s]", " ");
+            cleaned = NonAlphanumericRegex().Replace(cleaned, " ");
 
             // Collapse multiple spaces into single space and trim
-            cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+            cleaned = WhitespaceRunRegex().Replace(cleaned, " ").Trim();
 
             return cleaned;
         }
+
+        [GeneratedRegex(@"[^\p{L}\p{N}\s]", RegexOptions.CultureInvariant)]
+        private static partial Regex NonAlphanumericRegex();
+
+        [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
+        private static partial Regex WhitespaceRunRegex();
 
         /// <summary>
         /// Escapes an argument so that it survives command line parsing as a single argument when it is wrapped in double quotes by the caller.

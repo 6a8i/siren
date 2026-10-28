@@ -227,7 +227,8 @@ public partial class AudioNormalizationTask : IScheduledTask
 
     private async Task<float?> CalculateLUFSAsync(string inputArgs, bool waitForExit, CancellationToken cancellationToken)
     {
-        var args = $"-hide_banner {inputArgs} -af ebur128=framelog=verbose -f null -";
+        // -nostats drops the periodic "size=... time=..." progress lines; only the ebur128 summary is read.
+        var args = $"-hide_banner -nostats {inputArgs} -af ebur128=framelog=verbose -f null -";
 
         using (var process = new Process()
         {
