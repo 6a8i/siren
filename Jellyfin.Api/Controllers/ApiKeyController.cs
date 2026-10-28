@@ -49,16 +49,36 @@ public class ApiKeyController : BaseJellyfinApiController
     /// Create a new api key.
     /// </summary>
     /// <param name="app">Name of the app using the authentication key.</param>
+    /// <param name="isReadOnly">Whether the key may only make read requests (GET, HEAD, OPTIONS).</param>
     /// <response code="200">Api key created.</response>
     /// <returns>The created api key.</returns>
     [HttpPost("Keys")]
     [Authorize(Policy = Policies.RequiresElevation)]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<ActionResult<AuthenticationInfoDto>> CreateKey([FromQuery, Required] string app)
+    public async Task<ActionResult<AuthenticationInfoDto>> CreateKey([FromQuery, Required] string app, [FromQuery] bool isReadOnly = false)
     {
-        var key = await _authenticationManager.CreateApiKey(app).ConfigureAwait(false);
+        var key = await _authenticationManager.CreateApiKey(app, isReadOnly).ConfigureAwait(false);
 
         return ToDto(key);
+    }
+
+    /// <summary>
+    /// Mark an api key as read-only or read/write.
+    /// </summary>
+    /// <param name="key">The access token of the key.</param>
+    /// <param name="value">Whether the key may only make read requests (GET, HEAD, OPTIONS).</param>
+    /// <response code="204">Api key updated.</response>
+    /// <response code="404">Api key not found.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpPost("Keys/{key}/ReadOnly")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> SetKeyReadOnly([FromRoute, Required] string key, [FromQuery, Required] bool value)
+    {
+        var found = await _authenticationManager.SetApiKeyReadOnly(key, value).ConfigureAwait(false);
+
+        return found ? NoContent() : NotFound();
     }
 
     /// <summary>
@@ -91,6 +111,7 @@ public class ApiKeyController : BaseJellyfinApiController
             DateCreated = info.DateCreated,
             DateRevoked = info.DateRevoked,
             DateLastActivity = info.DateLastActivity,
-            UserName = info.UserName
+            UserName = info.UserName,
+            IsReadOnly = info.IsReadOnly
         };
 }

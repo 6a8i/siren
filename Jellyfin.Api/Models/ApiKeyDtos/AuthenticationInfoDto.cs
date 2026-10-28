@@ -66,4 +66,9 @@ public class AuthenticationInfoDto
     /// Gets or sets the user name.
     /// </summary>
     public string? UserName { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the key may only make read requests (GET, HEAD, OPTIONS).
+    /// </summary>
+    public bool IsReadOnly { get; set; }
 }

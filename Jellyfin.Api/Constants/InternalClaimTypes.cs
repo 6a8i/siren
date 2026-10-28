@@ -39,4 +39,9 @@ public static class InternalClaimTypes
     /// Is Api Key.
     /// </summary>
     public const string IsApiKey = "Jellyfin-IsApiKey";
+
+    /// <summary>
+    /// Is read-only Api Key (GET, HEAD and OPTIONS only).
+    /// </summary>
+    public const string IsReadOnlyApiKey = "Jellyfin-IsReadOnlyApiKey";
 }

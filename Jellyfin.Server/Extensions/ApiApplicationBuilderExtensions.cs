@@ -70,6 +70,16 @@ namespace Jellyfin.Server.Extensions
         }
 
         /// <summary>
+        /// Refuses write requests (anything but GET, HEAD and OPTIONS) made with a read-only API key.
+        /// </summary>
+        /// <param name="appBuilder">The application builder.</param>
+        /// <returns>The updated application builder.</returns>
+        public static IApplicationBuilder UseReadOnlyApiKeyEnforcement(this IApplicationBuilder appBuilder)
+        {
+            return appBuilder.UseMiddleware<ReadOnlyApiKeyMiddleware>();
+        }
+
+        /// <summary>
         /// Adds the browser security headers to every response.
         /// </summary>
         /// <param name="appBuilder">The application builder.</param>

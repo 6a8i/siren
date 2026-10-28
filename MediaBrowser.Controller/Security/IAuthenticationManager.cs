@@ -12,8 +12,17 @@ namespace MediaBrowser.Controller.Security
         /// Creates an API key.
         /// </summary>
         /// <param name="name">The name of the key.</param>
+        /// <param name="isReadOnly">Whether the key may only make read requests (GET, HEAD, OPTIONS).</param>
         /// <returns>A task representing the creation of the key, containing the created key.</returns>
-        Task<AuthenticationInfo> CreateApiKey(string name);
+        Task<AuthenticationInfo> CreateApiKey(string name, bool isReadOnly = false);
+
+        /// <summary>
+        /// Marks an API key as read-only or read/write.
+        /// </summary>
+        /// <param name="accessToken">The access token.</param>
+        /// <param name="isReadOnly">Whether the key may only make read requests (GET, HEAD, OPTIONS).</param>
+        /// <returns>A task containing <c>true</c> when a key holds the token, <c>false</c> otherwise.</returns>
+        Task<bool> SetApiKeyReadOnly(string accessToken, bool isReadOnly);
 
         /// <summary>
         /// Gets the API keys.

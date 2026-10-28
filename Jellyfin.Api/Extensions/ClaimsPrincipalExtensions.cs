@@ -75,6 +75,18 @@ public static class ClaimsPrincipalExtensions
                && parsedClaimValue;
     }
 
+    /// <summary>
+    /// Gets a flag specifying whether the request is using a read-only api key (GET, HEAD and OPTIONS only).
+    /// </summary>
+    /// <param name="user">Current claims principal.</param>
+    /// <returns>The flag specifying whether the request is using a read-only api key.</returns>
+    public static bool GetIsReadOnlyApiKey(this ClaimsPrincipal user)
+    {
+        var claimValue = GetClaimValue(user, InternalClaimTypes.IsReadOnlyApiKey);
+        return bool.TryParse(claimValue, out var parsedClaimValue)
+               && parsedClaimValue;
+    }
+
     private static string? GetClaimValue(in ClaimsPrincipal user, string name)
         => user.Claims.FirstOrDefault(claim => claim.Type.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;
 }

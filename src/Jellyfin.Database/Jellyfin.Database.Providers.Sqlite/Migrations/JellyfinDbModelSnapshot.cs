@@ -1181,6 +1181,9 @@ namespace Jellyfin.Server.Implementations.Migrations
                     b.Property<DateTime>("DateLastActivity")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("IsReadOnly")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(64)

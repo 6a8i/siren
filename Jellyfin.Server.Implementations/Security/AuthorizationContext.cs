@@ -209,6 +209,7 @@ namespace Jellyfin.Server.Implementations.Security
                     }
 
                     authInfo.IsApiKey = true;
+                    authInfo.IsReadOnlyApiKey = key.IsReadOnly;
                 }
             }
 

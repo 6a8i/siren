@@ -123,6 +123,30 @@ Pontos de atenção:
 - Quando a conexão não tem endereço (o `TestServer` dos testes de integração) nada é limitado.
 - `POST /System/CspReport` não entra na política: é anônimo e um navegador o chama sozinho.
 
+## Chaves de API somente leitura
+
+Uma chave de API continua tendo os poderes de um administrador, mas pode ser marcada como **somente
+leitura**: com ela o servidor só aceita requisições `GET`, `HEAD` e `OPTIONS`. Qualquer outro
+método (`POST`, `PUT`, `DELETE`, `PATCH`) recebe `403 Forbidden` com o corpo `This API key is
+read-only and may only make GET, HEAD and OPTIONS requests.` e uma linha de aviso no log
+(`Refusing POST /Library/Refresh made with the read-only API key of <app>`). Serve para
+integrações que só consultam (painéis, exportadores de métricas, scripts de inventário) sem
+entregar a elas o poder de apagar ou alterar algo.
+
+- **Criar:** `POST /Auth/Keys?app=<nome>&isReadOnly=true` (sem o parâmetro, ou com `false`, a
+  chave é de leitura e escrita como sempre foi).
+- **Alternar:** `POST /Auth/Keys/{token}/ReadOnly?value=true|false` (administrador; responde
+  `204`, ou `404` se o token não existe). Vale na requisição seguinte: a tabela de chaves fica em
+  memória e é descartada a cada escrita.
+- **Listar:** `GET /Auth/Keys` devolve `IsReadOnly` em cada chave.
+- A verificação é feita no middleware `Jellyfin.Api/Middleware/ReadOnlyApiKeyMiddleware.cs`,
+  logo depois da autenticação e antes do roteamento, então não depende da política de cada
+  endpoint; o pedido nem chega ao controlador. A chave somente leitura também não consegue tirar a
+  própria restrição, porque isso é um `POST`.
+- Chaves sem a marca não mudam em nada. A coluna `IsReadOnly` da tabela `ApiKeys` chega pela
+  migração `AddApiKeyReadOnly`, com `false` para as chaves existentes.
+- Sessões de usuário (tokens emitidos no login) não têm a marca; isso é só para chaves de API.
+
 ## Backup agendado
 
 A tarefa **Fazer backup do sistema** (chave `SystemBackup`, categoria Manutenção) roda por padrão

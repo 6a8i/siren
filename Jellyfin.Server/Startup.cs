@@ -254,6 +254,11 @@ namespace Jellyfin.Server
 
                 mainApp.UseStaticFiles();
                 mainApp.UseAuthentication();
+
+                // Right after authentication, so a write made with a read-only API key is refused before
+                // routing and authorization, whatever the endpoint's policy.
+                mainApp.UseReadOnlyApiKeyEnforcement();
+
                 mainApp.UseJellyfinApiSwagger(_serverConfigurationManager);
                 mainApp.UseQueryStringDecoding();
                 mainApp.UseRouting();

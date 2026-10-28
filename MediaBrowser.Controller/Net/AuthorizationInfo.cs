@@ -51,6 +51,12 @@ namespace MediaBrowser.Controller.Net
         public bool IsApiKey { get; set; }
 
         /// <summary>
+        /// Gets or sets a value indicating whether the authorization is from a read-only api key,
+        /// which may only make GET, HEAD and OPTIONS requests.
+        /// </summary>
+        public bool IsReadOnlyApiKey { get; set; }
+
+        /// <summary>
         /// Gets or sets the user making the request.
         /// </summary>
         public User? User { get; set; }

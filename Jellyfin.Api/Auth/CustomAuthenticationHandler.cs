@@ -67,7 +67,8 @@ namespace Jellyfin.Api.Auth
                     new Claim(InternalClaimTypes.Client, authorizationInfo.Client ?? string.Empty),
                     new Claim(InternalClaimTypes.Version, authorizationInfo.Version ?? string.Empty),
                     new Claim(InternalClaimTypes.Token, authorizationInfo.Token),
-                    new Claim(InternalClaimTypes.IsApiKey, authorizationInfo.IsApiKey.ToString(CultureInfo.InvariantCulture))
+                    new Claim(InternalClaimTypes.IsApiKey, authorizationInfo.IsApiKey.ToString(CultureInfo.InvariantCulture)),
+                    new Claim(InternalClaimTypes.IsReadOnlyApiKey, authorizationInfo.IsReadOnlyApiKey.ToString(CultureInfo.InvariantCulture))
                 };
 
                 var identity = new ClaimsIdentity(claims, Scheme.Name);

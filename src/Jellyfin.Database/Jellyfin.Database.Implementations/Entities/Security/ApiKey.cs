@@ -52,5 +52,10 @@ namespace Jellyfin.Database.Implementations.Entities.Security
         /// Gets or sets the access token.
         /// </summary>
         public string AccessToken { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the key may only make read requests (GET, HEAD, OPTIONS).
+        /// </summary>
+        public bool IsReadOnly { get; set; }
     }
 }

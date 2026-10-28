@@ -11,7 +11,7 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
     public partial class JellyfinDbContextModel
     {
         private JellyfinDbContextModel()
-            : base(skipDetectChanges: false, modelId: new Guid("f9d6066f-4296-4642-abf7-07c9ae7e718b"), entityTypeCount: 32)
+            : base(skipDetectChanges: false, modelId: new Guid("a099e0df-a30e-49b7-8026-23968a9aed35"), entityTypeCount: 32)
         {
         }
 

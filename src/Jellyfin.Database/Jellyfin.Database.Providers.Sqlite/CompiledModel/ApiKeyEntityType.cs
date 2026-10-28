@@ -20,7 +20,7 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
                 "Jellyfin.Database.Implementations.Entities.Security.ApiKey",
                 typeof(ApiKey),
                 baseEntityType,
-                propertyCount: 5,
+                propertyCount: 6,
                 unnamedIndexCount: 1,
                 keyCount: 1);
 
@@ -58,6 +58,13 @@ namespace Jellyfin.Database.Providers.Sqlite.CompiledModel
                 DateTime (DateTime v) => v.ToUniversalTime(),
                 DateTime (DateTime v) => DateTime.SpecifyKind(v, DateTimeKind.Utc)));
             dateLastActivity.SetSentinelFromProviderValue(new DateTime(1, 1, 1, 2, 0, 0, 0, DateTimeKind.Utc));
+
+            var isReadOnly = runtimeEntityType.AddProperty(
+                "IsReadOnly",
+                typeof(bool),
+                propertyInfo: typeof(ApiKey).GetProperty("IsReadOnly", BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                fieldInfo: typeof(ApiKey).GetField("<IsReadOnly>k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                sentinel: false);
 
             var name = runtimeEntityType.AddProperty(
                 "Name",

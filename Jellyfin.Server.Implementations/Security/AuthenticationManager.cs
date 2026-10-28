@@ -28,12 +28,12 @@ namespace Jellyfin.Server.Implementations.Security
         }
 
         /// <inheritdoc />
-        public async Task<AuthenticationInfo> CreateApiKey(string name)
+        public async Task<AuthenticationInfo> CreateApiKey(string name, bool isReadOnly = false)
         {
             var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
             await using (dbContext.ConfigureAwait(false))
             {
-                var apiKey = new ApiKey(name);
+                var apiKey = new ApiKey(name) { IsReadOnly = isReadOnly };
                 dbContext.ApiKeys.Add(apiKey);
 
                 await dbContext.SaveChangesAsync().ConfigureAwait(false);
@@ -57,7 +57,8 @@ namespace Jellyfin.Server.Implementations.Security
                         DateCreated = key.DateCreated,
                         DeviceId = string.Empty,
                         DeviceName = string.Empty,
-                        AppVersion = string.Empty
+                        AppVersion = string.Empty,
+                        IsReadOnly = key.IsReadOnly
                     }).ToListAsync().ConfigureAwait(false);
             }
         }
@@ -80,6 +81,24 @@ namespace Jellyfin.Server.Implementations.Security
             }
 
             return keys.GetValueOrDefault(accessToken);
+        }
+
+        /// <inheritdoc />
+        public async Task<bool> SetApiKeyReadOnly(string accessToken, bool isReadOnly)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(accessToken);
+
+            var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
+            await using (dbContext.ConfigureAwait(false))
+            {
+                var updated = await dbContext.ApiKeys
+                    .Where(apiKey => apiKey.AccessToken == accessToken)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(apiKey => apiKey.IsReadOnly, isReadOnly))
+                    .ConfigureAwait(false);
+
+                _apiKeysByToken = null;
+                return updated > 0;
+            }
         }
 
         /// <inheritdoc />
@@ -106,7 +125,8 @@ namespace Jellyfin.Server.Implementations.Security
                 DateCreated = apiKey.DateCreated,
                 DeviceId = string.Empty,
                 DeviceName = string.Empty,
-                AppVersion = string.Empty
+                AppVersion = string.Empty,
+                IsReadOnly = apiKey.IsReadOnly
             };
         }
     }
