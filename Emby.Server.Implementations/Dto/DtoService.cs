@@ -265,14 +265,31 @@ namespace Emby.Server.Implementations.Dto
                 artistsBatch = _libraryManager.GetArtists(artistNames.ToArray());
             }
 
-            // Batch-fetch people across all items to avoid one GetPeople query per item.
+            // Batch-fetch people across all items to avoid one GetPeople query per item, then the Person
+            // items behind every distinct name in one more query: they carry the ids and images the DTOs
+            // show, and are not kept in the item cache, so resolving them one by one was a query per credit.
             IReadOnlyDictionary<Guid, IReadOnlyList<PersonInfo>>? peopleBatch = null;
+            IReadOnlyDictionary<string, Person>? personsBatch = null;
             if (options.ContainsField(ItemFields.People))
             {
                 var peopleItemIds = accessibleItems.Where(i => i.SupportsPeople).Select(i => i.Id).ToList();
                 if (peopleItemIds.Count > 0)
                 {
                     peopleBatch = _libraryManager.GetPeopleByItems(peopleItemIds);
+
+                    var personNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var itemPeople in peopleBatch.Values)
+                    {
+                        foreach (var person in itemPeople)
+                        {
+                            if (!string.IsNullOrEmpty(person.Name))
+                            {
+                                personNames.Add(person.Name);
+                            }
+                        }
+                    }
+
+                    personsBatch = GetPersonsByName(personNames);
                 }
             }
 
@@ -312,6 +329,7 @@ namespace Emby.Server.Implementations.Dto
                     artistsBatch,
                     resumeDataBatch?.GetValueOrDefault(item.Id),
                     peopleBatch,
+                    personsBatch,
                     alternateVersionItemIds,
                     lyricItemIds);
 
@@ -377,6 +395,7 @@ namespace Emby.Server.Implementations.Dto
             IReadOnlyDictionary<string, MusicArtist[]>? artistsBatch = null,
             VersionResumeData? resumeData = null,
             IReadOnlyDictionary<Guid, IReadOnlyList<PersonInfo>>? peopleBatch = null,
+            IReadOnlyDictionary<string, Person>? personsBatch = null,
             IReadOnlySet<Guid>? alternateVersionItemIds = null,
             IReadOnlySet<Guid>? lyricItemIds = null)
         {
@@ -400,7 +419,7 @@ namespace Emby.Server.Implementations.Dto
                     prefetchedPeople = peopleBatch.GetValueOrDefault(item.Id) ?? [];
                 }
 
-                AttachPeople(dto, item, user, prefetchedPeople);
+                AttachPeople(dto, item, user, prefetchedPeople, personsBatch);
             }
 
             if (options.ContainsField(ItemFields.PrimaryImageAspectRatio))
@@ -919,12 +938,23 @@ namespace Emby.Server.Implementations.Dto
         /// <param name="item">The item.</param>
         /// <param name="user">The requesting user.</param>
         /// <param name="prefetchedPeople">People fetched in batch by the caller; when null the people are queried per item.</param>
-        private void AttachPeople(BaseItemDto dto, BaseItem item, User? user = null, IReadOnlyList<PersonInfo>? prefetchedPeople = null)
+        /// <param name="prefetchedPersons">Person items fetched in batch by the caller, by name; when null they are queried for this item's people.</param>
+        private void AttachPeople(
+            BaseItemDto dto,
+            BaseItem item,
+            User? user = null,
+            IReadOnlyList<PersonInfo>? prefetchedPeople = null,
+            IReadOnlyDictionary<string, Person>? prefetchedPersons = null)
         {
             // When rendering a page of items the caller batch-fetches people for every item up
             // front and passes them in, avoiding one GetPeople query per item. Fall back to the
             // per-item query for the single item path where no batch is available.
             var source = prefetchedPeople ?? _libraryManager.GetPeople(item);
+            if (source.Count == 0)
+            {
+                dto.People = [];
+                return;
+            }
 
             // Ordering by person type to ensure actors and artists are at the front.
             // This is taking advantage of the fact that they both begin with A
@@ -966,65 +996,88 @@ namespace Emby.Server.Implementations.Dto
                 })
                 .ToList();
 
-            var list = new List<BaseItemPerson>();
-
-            Dictionary<string, Person> dictionary = people.Select(p => p.Name)
-                .Distinct(StringComparer.OrdinalIgnoreCase).Select(c =>
+            // The single item path resolves the Person items of this item's names in one query too.
+            var persons = prefetchedPersons;
+            if (persons is null)
+            {
+                var names = new HashSet<string>(people.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var person in people)
                 {
-                    try
+                    if (!string.IsNullOrEmpty(person.Name))
                     {
-                        return _libraryManager.GetPerson(c);
+                        names.Add(person.Name);
                     }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error getting person {Name}", c);
-                        return null;
-                    }
-                }).Where(i => i is not null)
-                .Where(i => user is null || i!.IsVisible(user))
-                .DistinctBy(x => x!.Name, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(i => i!.Name, StringComparer.OrdinalIgnoreCase)!; // null values got filtered out
+                }
 
+                persons = GetPersonsByName(names);
+            }
+
+            var list = new List<BaseItemPerson>(people.Count);
             for (var i = 0; i < people.Count; i++)
             {
                 var person = people[i];
+                if (string.IsNullOrEmpty(person.Name)
+                    || !persons.TryGetValue(person.Name, out var entity)
+                    || (user is not null && !entity.IsVisible(user)))
+                {
+                    continue;
+                }
 
                 var baseItemPerson = new BaseItemPerson
                 {
                     Name = person.Name,
                     Role = person.Role,
-                    Type = person.Type
+                    Type = person.Type,
+                    Id = entity.Id,
+                    PrimaryImageTag = GetTagAndFillBlurhash(dto, entity, ImageType.Primary)
                 };
 
-                if (dictionary.TryGetValue(person.Name, out Person? entity))
+                if (dto.ImageBlurHashes is not null)
                 {
-                    baseItemPerson.PrimaryImageTag = GetTagAndFillBlurhash(dto, entity, ImageType.Primary);
-                    baseItemPerson.Id = entity.Id;
-                    if (dto.ImageBlurHashes is not null)
+                    // Only add BlurHash for the person's image.
+                    baseItemPerson.ImageBlurHashes = [];
+                    foreach (var (imageType, blurHash) in dto.ImageBlurHashes)
                     {
-                        // Only add BlurHash for the person's image.
-                        baseItemPerson.ImageBlurHashes = [];
-                        foreach (var (imageType, blurHash) in dto.ImageBlurHashes)
+                        if (blurHash is not null)
                         {
-                            if (blurHash is not null)
+                            baseItemPerson.ImageBlurHashes[imageType] = [];
+                            foreach (var (imageId, blurHashValue) in blurHash)
                             {
-                                baseItemPerson.ImageBlurHashes[imageType] = [];
-                                foreach (var (imageId, blurHashValue) in blurHash)
+                                if (string.Equals(baseItemPerson.PrimaryImageTag, imageId, StringComparison.OrdinalIgnoreCase))
                                 {
-                                    if (string.Equals(baseItemPerson.PrimaryImageTag, imageId, StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        baseItemPerson.ImageBlurHashes[imageType][imageId] = blurHashValue;
-                                    }
+                                    baseItemPerson.ImageBlurHashes[imageType][imageId] = blurHashValue;
                                 }
                             }
                         }
                     }
-
-                    list.Add(baseItemPerson);
                 }
+
+                list.Add(baseItemPerson);
             }
 
             dto.People = list.ToArray();
+        }
+
+        /// <summary>
+        /// Resolves the Person items of a set of names in one query; a failure costs the images and ids of
+        /// those people, not the page.
+        /// </summary>
+        private IReadOnlyDictionary<string, Person> GetPersonsByName(IReadOnlyCollection<string> names)
+        {
+            if (names.Count == 0)
+            {
+                return FrozenDictionary<string, Person>.Empty;
+            }
+
+            try
+            {
+                return _libraryManager.GetPersonsByName(names);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting {Count} people by name", names.Count);
+                return FrozenDictionary<string, Person>.Empty;
+            }
         }
 
         /// <summary>

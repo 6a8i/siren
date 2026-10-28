@@ -2,6 +2,7 @@
 #pragma warning disable CA5394
 
 using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -65,6 +66,12 @@ namespace Emby.Server.Implementations.Library
     {
         private const string ShortcutFileExtension = ".mblink";
 
+        /// <summary>
+        /// Names whose ids are remembered. A library has a few thousand distinct people, studios and
+        /// genres; each entry is a reference to the name plus a Guid.
+        /// </summary>
+        private const int ItemByNameIdCacheSize = 8192;
+
         private readonly ILogger<LibraryManager> _logger;
         private readonly ITaskManager _taskManager;
         private readonly IUserManager _userManager;
@@ -88,6 +95,7 @@ namespace Emby.Server.Implementations.Library
         private readonly ILocalizationManager _localization;
         private readonly IDirectoryService _directoryService;
         private readonly FastConcurrentLru<Guid, BaseItem> _cache;
+        private readonly ItemByNameIdCache _itemByNameIds = new(ItemByNameIdCacheSize);
         private readonly DotIgnoreIgnoreRule _dotIgnoreIgnoreRule;
         private readonly IMediaStreamRepository _mediaStreamRepository;
         private readonly Lazy<IExternalDataManager> _externalDataManagerFactory;
@@ -315,6 +323,9 @@ namespace Emby.Server.Implementations.Library
             var wizardChanged = config.IsStartupWizardCompleted != _wizardCompleted;
 
             RecordConfigurationValues(config);
+
+            // EnableCaseSensitiveItemIds and EnableNormalizedItemByNameIds take part in every by-name id.
+            _itemByNameIds.Clear();
 
             if (wizardChanged)
             {
@@ -1220,20 +1231,68 @@ namespace Emby.Server.Implementations.Library
         /// <inheritdoc />
         public Guid GetPersonId(string name)
         {
-            return GetItemByNameId<Person>(Person.GetPath(name));
+            return GetItemByNameId<Person>(name, Person.GetPath);
         }
 
         /// <inheritdoc />
         public Person? GetPerson(string name)
         {
-            var path = Person.GetPath(name);
-            var id = GetItemByNameId<Person>(path);
-            if (GetItemById(id) is Person item)
+            if (GetItemById(GetPersonId(name)) is Person item)
             {
                 return item;
             }
 
             return null;
+        }
+
+        /// <inheritdoc />
+        public IReadOnlyDictionary<string, Person> GetPersonsByName(IReadOnlyCollection<string> names)
+        {
+            ArgumentNullException.ThrowIfNull(names);
+
+            if (names.Count == 0)
+            {
+                return FrozenDictionary<string, Person>.Empty;
+            }
+
+            // Two spellings of a name can share an id (the ids are normalized), so the ids are collected
+            // once each and the result is keyed by the spelling that was asked for.
+            var idsByName = new Dictionary<string, Guid>(names.Count, StringComparer.OrdinalIgnoreCase);
+            var ids = new List<Guid>(names.Count);
+            foreach (var name in names)
+            {
+                if (string.IsNullOrWhiteSpace(name) || idsByName.ContainsKey(name))
+                {
+                    continue;
+                }
+
+                var id = GetPersonId(name);
+                idsByName.Add(name, id);
+                if (!ids.Contains(id))
+                {
+                    ids.Add(id);
+                }
+            }
+
+            var personsById = new Dictionary<Guid, Person>(ids.Count);
+            foreach (var item in GetItemsByIds(ids))
+            {
+                if (item is Person person)
+                {
+                    personsById[person.Id] = person;
+                }
+            }
+
+            var result = new Dictionary<string, Person>(idsByName.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, id) in idsByName)
+            {
+                if (personsById.TryGetValue(id, out var person))
+                {
+                    result.Add(name, person);
+                }
+            }
+
+            return result;
         }
 
         /// <inheritdoc />
@@ -1250,7 +1309,7 @@ namespace Emby.Server.Implementations.Library
             var item = new Person
             {
                 Name = name,
-                Id = GetItemByNameId<Person>(path),
+                Id = GetPersonId(name),
                 DateCreated = info.CreationTimeUtc,
                 DateModified = info.LastWriteTimeUtc,
                 Path = path
@@ -1275,17 +1334,17 @@ namespace Emby.Server.Implementations.Library
 
         public Guid GetStudioId(string name)
         {
-            return GetItemByNameId<Studio>(Studio.GetPath(name));
+            return GetItemByNameId<Studio>(name, Studio.GetPath);
         }
 
         public Guid GetGenreId(string name)
         {
-            return GetItemByNameId<Genre>(Genre.GetPath(name));
+            return GetItemByNameId<Genre>(name, Genre.GetPath);
         }
 
         public Guid GetMusicGenreId(string name)
         {
-            return GetItemByNameId<MusicGenre>(MusicGenre.GetPath(name));
+            return GetItemByNameId<MusicGenre>(name, MusicGenre.GetPath);
         }
 
         /// <summary>
@@ -1366,11 +1425,11 @@ namespace Emby.Server.Implementations.Library
                 }
             }
 
-            var path = getPathFn(name);
-            var id = GetItemByNameId<T>(path);
+            var id = GetItemByNameId<T>(name, getPathFn);
             var item = GetItemById(id) as T;
             if (item is null)
             {
+                var path = getPathFn(name);
                 var info = Directory.CreateDirectory(path);
                 item = new T
                 {
@@ -1387,11 +1446,26 @@ namespace Emby.Server.Implementations.Library
             return item;
         }
 
-        private Guid GetItemByNameId<T>(string path)
-              where T : BaseItem, new()
+        /// <summary>
+        /// Gets the id a by-name item has for a name, remembering it: the path and the hash are only
+        /// computed the first time a name is asked for since the last configuration change.
+        /// </summary>
+        /// <typeparam name="T">The by-name item type.</typeparam>
+        /// <param name="name">The name.</param>
+        /// <param name="getPathFn">Builds the item's folder path from the name; only called on a miss.</param>
+        /// <returns>The id.</returns>
+        private Guid GetItemByNameId<T>(string name, Func<string, string> getPathFn)
+              where T : BaseItem
         {
+            if (_itemByNameIds.TryGet(typeof(T), name, out var id))
+            {
+                return id;
+            }
+
             var forceCaseInsensitiveId = _configurationManager.Configuration.EnableNormalizedItemByNameIds;
-            return GetNewItemIdInternal(path, typeof(T), forceCaseInsensitiveId);
+            id = GetNewItemIdInternal(getPathFn(name), typeof(T), forceCaseInsensitiveId);
+            _itemByNameIds.Set(typeof(T), name, id);
+            return id;
         }
 
         /// <summary>

@@ -733,6 +733,16 @@ namespace MediaBrowser.Controller.Library
         /// <returns>The item id for the name.</returns>
         Guid GetPersonId(string name);
 
+        /// <summary>
+        /// Gets the <see cref="Person"/> items of several names in one query.
+        /// </summary>
+        /// <param name="names">The names of the people.</param>
+        /// <returns>
+        /// The person item of each name that has one, keyed by the name as given (case-insensitive);
+        /// names without a person item are left out.
+        /// </returns>
+        IReadOnlyDictionary<string, Person> GetPersonsByName(IReadOnlyCollection<string> names);
+
         Guid GetStudioId(string name);
 
         Guid GetGenreId(string name);

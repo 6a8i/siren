@@ -115,8 +115,15 @@ ficou de fora:
   `.ignore` em 4096. Instalações existentes mantêm o `CacheSize` gravado no XML.
 - Item 43: `GetItemByNameDtos` em lote, usado pelos endpoints de artistas, gêneros, estúdios e
   pessoas. Years continua por item porque recebe os itens marcados.
-- Item 44 (campos mínimos por endpoint) e 45 (memoização de ids por nome): não feitos; o lote de
-  pessoas já existia no `GetBaseItemDtos`.
+- Item 44 (campos mínimos por endpoint): não feito.
+- Item 45: feito em 2026-10-28. `LibraryManager` memoriza `(tipo, nome) -> Guid` para pessoas,
+  estúdios, gêneros, gêneros musicais, artistas e anos em um LRU de 8192 entradas
+  (`ItemByNameIdCache`), limpo quando a configuração muda (os dois flags de normalização de id
+  entram no hash; renomear um item não muda o id de um nome). O `GetBaseItemDtos` já tinha o lote
+  de créditos (`PersonInfo`) por página; agora as entidades `Person` por trás dos nomes distintos
+  também vêm em uma consulta (`GetPersonsByName`), em vez de um `GetItemById` por crédito, que ia
+  ao banco porque `Person` não entra no cache de itens. O caminho de um item só também resolve os
+  seus nomes em uma consulta.
 - Item 46: cache tag sem alocação intermediária, mesmo valor de antes (não há cache por imagem).
 - Item 48: fila deduplicada por item quando já há um refresh igual ou mais forte pendente;
   `LibraryMetadataRefreshConcurrency` passa a valer (0 continua = 1 consumidor).
