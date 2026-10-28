@@ -493,9 +493,20 @@ namespace Jellyfin.Server.Implementations.Tests.Localization
                 UICulture = "en-US"
             });
 
-            var translated = localizationManager.GetLocalizedString(key);
-            Assert.NotNull(translated);
-            Assert.Equal(expected, translated);
+            // The single-argument overload follows CultureInfo.CurrentUICulture (the request culture),
+            // not the server culture, so pin it or the test depends on the machine's UI language.
+            var previousCulture = CultureInfo.CurrentUICulture;
+            try
+            {
+                CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("en-US");
+                var translated = localizationManager.GetLocalizedString(key);
+                Assert.NotNull(translated);
+                Assert.Equal(expected, translated);
+            }
+            finally
+            {
+                CultureInfo.CurrentUICulture = previousCulture;
+            }
         }
 
         [Fact]
