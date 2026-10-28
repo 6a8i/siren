@@ -663,6 +663,7 @@ public class FamilyController : BaseJellyfinApiController
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting(AuthenticationRateLimit.PolicyName)]
     public async Task<ActionResult<AuthenticationResult>> SwitchProfile(
         [FromRoute, Required] Guid familyId,
         [FromRoute, Required] Guid userId,

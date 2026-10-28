@@ -29,6 +29,7 @@ using MediaBrowser.Model.Users;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Api.Controllers;
@@ -190,6 +191,7 @@ public class UserController : BaseJellyfinApiController
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ApiExplorerSettings(IgnoreApi = true)]
+    [EnableRateLimiting(AuthenticationRateLimit.PolicyName)]
     [Obsolete("Authenticate with username instead")]
     public async Task<ActionResult<AuthenticationResult>> AuthenticateUser(
         [FromRoute, Required] Guid userId,
@@ -219,6 +221,7 @@ public class UserController : BaseJellyfinApiController
     [HttpPost("AuthenticateByName")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [Tags("Authentication")]
+    [EnableRateLimiting(AuthenticationRateLimit.PolicyName)]
     public async Task<ActionResult<AuthenticationResult>> AuthenticateUserByName([FromBody, Required] AuthenticateUserByName request)
     {
         var auth = await _authContext.GetAuthorizationInfo(Request).ConfigureAwait(false);
@@ -255,6 +258,7 @@ public class UserController : BaseJellyfinApiController
     [HttpPost("AuthenticateWithQuickConnect")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [Tags("Authentication")]
+    [EnableRateLimiting(AuthenticationRateLimit.PolicyName)]
     public ActionResult<AuthenticationResult> AuthenticateWithQuickConnect([FromBody, Required] QuickConnectDto request)
     {
         try
@@ -556,6 +560,7 @@ public class UserController : BaseJellyfinApiController
     [HttpPost("ForgotPassword")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [Tags("Authentication")]
+    [EnableRateLimiting(AuthenticationRateLimit.PolicyName)]
     public async Task<ActionResult<ForgotPasswordResult>> ForgotPassword([FromBody, Required] ForgotPasswordDto forgotPasswordRequest)
     {
         var ip = HttpContext.GetNormalizedRemoteIP();
@@ -581,6 +586,7 @@ public class UserController : BaseJellyfinApiController
     [HttpPost("ForgotPassword/Pin")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [Tags("Authentication")]
+    [EnableRateLimiting(AuthenticationRateLimit.PolicyName)]
     public async Task<ActionResult<PinRedeemResult>> ForgotPasswordPin([FromBody, Required] ForgotPasswordPinDto forgotPasswordPinRequest)
     {
         var result = await _userManager.RedeemPasswordResetPin(forgotPasswordPinRequest.Pin).ConfigureAwait(false);

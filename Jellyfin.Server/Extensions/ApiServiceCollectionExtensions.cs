@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -7,6 +8,10 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json.Nodes;
+using System.Threading;
+using System.Threading.RateLimiting;
+using System.Threading.Tasks;
+using System.Web;
 using Emby.Server.Implementations;
 using Jellyfin.Api.Auth;
 using Jellyfin.Api.Auth.AnonymousLanAccessPolicy;
@@ -31,9 +36,12 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Cors.Infrastructure;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.OpenApi;
 using Swashbuckle.AspNetCore.Swagger;
 using Swashbuckle.AspNetCore.SwaggerGen;
@@ -100,6 +108,73 @@ namespace Jellyfin.Server.Extensions
         {
             return serviceCollection.AddAuthentication(AuthenticationSchemes.CustomAuthentication)
                 .AddScheme<AuthenticationSchemeOptions, CustomAuthenticationHandler>(AuthenticationSchemes.CustomAuthentication, null);
+        }
+
+        /// <summary>
+        /// Adds the rate limiting policies to the service collection. Only endpoints marked with
+        /// <see cref="EnableRateLimitingAttribute"/> are limited; see <see cref="AuthenticationRateLimit"/>.
+        /// </summary>
+        /// <param name="serviceCollection">The service collection.</param>
+        /// <returns>The updated service collection.</returns>
+        public static IServiceCollection AddJellyfinRateLimiting(this IServiceCollection serviceCollection)
+        {
+            return serviceCollection.AddRateLimiter(options =>
+            {
+                options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+                options.OnRejected = OnRateLimitRejected;
+                options.AddPolicy(AuthenticationRateLimit.PolicyName, GetAuthenticationRateLimitPartition);
+            });
+        }
+
+        /// <summary>
+        /// Picks the rate limit partition of a request under the authentication policy: a fixed window per
+        /// client address, or no limit when the connection carries no address (the in-memory test server).
+        /// </summary>
+        /// <param name="httpContext">The current HTTP context.</param>
+        /// <returns>The partition the request is counted in.</returns>
+        internal static RateLimitPartition<IPAddress> GetAuthenticationRateLimitPartition(HttpContext httpContext)
+        {
+            // The forwarded-headers middleware runs first, so behind a known proxy this is already the client.
+            var remoteIp = httpContext.Connection.RemoteIpAddress;
+            if (remoteIp is null)
+            {
+                return RateLimitPartition.GetNoLimiter(IPAddress.None);
+            }
+
+            // Kestrel reports IPv4 clients of a dual-stack socket as ::ffff:a.b.c.d; count them as a.b.c.d.
+            if (remoteIp.IsIPv4MappedToIPv6)
+            {
+                remoteIp = remoteIp.MapToIPv4();
+            }
+
+            return RateLimitPartition.GetFixedWindowLimiter(remoteIp, static _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = AuthenticationRateLimit.PermitLimit,
+                Window = TimeSpan.FromSeconds(AuthenticationRateLimit.WindowSeconds),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+        }
+
+        private static ValueTask OnRateLimitRejected(OnRejectedContext context, CancellationToken cancellationToken)
+        {
+            var httpContext = context.HttpContext;
+            var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var untilReplenished)
+                ? Math.Max(1, (int)Math.Ceiling(untilReplenished.TotalSeconds))
+                : AuthenticationRateLimit.WindowSeconds;
+            httpContext.Response.Headers.RetryAfter = retryAfter.ToString(CultureInfo.InvariantCulture);
+
+            httpContext.RequestServices
+                .GetRequiredService<ILoggerFactory>()
+                .CreateLogger(typeof(ApiServiceCollectionExtensions).Namespace + ".RateLimiting")
+                .LogWarning(
+                    "Rate limit reached for {Path} by {RemoteIP}, rejecting with 429 for {RetryAfter}s",
+                    // url-encode to block log injection
+                    HttpUtility.UrlEncode(httpContext.Request.Path),
+                    httpContext.Connection.RemoteIpAddress,
+                    retryAfter);
+
+            return ValueTask.CompletedTask;
         }
 
         /// <summary>

@@ -91,6 +91,7 @@ namespace Jellyfin.Server
             services.AddCustomAuthentication();
 
             services.AddJellyfinApiAuthorization();
+            services.AddJellyfinRateLimiting();
 
             var productHeader = new ProductInfoHeaderValue(
                 _serverApplicationHost.Name.Replace(' ', '-'),
@@ -256,6 +257,11 @@ namespace Jellyfin.Server
                 mainApp.UseJellyfinApiSwagger(_serverConfigurationManager);
                 mainApp.UseQueryStringDecoding();
                 mainApp.UseRouting();
+
+                // Needs the matched endpoint (its EnableRateLimiting metadata), so after routing; before
+                // authorization so a limited login attempt is answered without any further work.
+                mainApp.UseRateLimiter();
+
                 mainApp.UseAuthorization();
 
                 mainApp.UseWebSocketHandler();
