@@ -175,7 +175,8 @@ namespace Jellyfin.Server
             var configurationCompleted = false;
             try
             {
-                _jellyfinHost = Host.CreateDefaultBuilder()
+                // The default builder watches the working directory recursively for config changes; nothing here reloads from it.
+                _jellyfinHost = Host.CreateDefaultBuilder(["hostBuilder:reloadConfigOnChange=false"])
                     .UseConsoleLifetime()
                     .ConfigureServices(services => appHost.Init(services))
                     .ConfigureWebHostDefaults(webHostBuilder =>

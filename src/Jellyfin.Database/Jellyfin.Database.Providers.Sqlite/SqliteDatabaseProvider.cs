@@ -121,6 +121,11 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
             options.EnableSensitiveDataLogging(enableSensitiveDataLogging);
             _logger.LogInformation("EnableSensitiveDataLogging is enabled on SQLite connection");
         }
+
+        // The model is compiled at build time (dotnet ef dbcontext optimize, see CompiledModel/), so the
+        // first query does not pay for building it by reflection. Regenerate it whenever the entity
+        // configuration changes; the tests compare it against the live model.
+        options.UseModel(CompiledModel.JellyfinDbContextModel.Instance);
     }
 
     /// <inheritdoc/>

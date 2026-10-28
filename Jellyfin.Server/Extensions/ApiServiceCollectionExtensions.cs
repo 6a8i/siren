@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
@@ -218,11 +219,19 @@ namespace Jellyfin.Server.Extensions
                     Description = "API key header parameter"
                 });
 
-                // Add all xml doc files to swagger generator.
+                // Only this solution's own doc files describe the API; the third-party ones next to them
+                // (Skia, Serilog, ...) were loaded and kept in memory for nothing.
                 var xmlFiles = Directory.EnumerateFiles(
                     AppContext.BaseDirectory,
                     "*.xml",
-                    SearchOption.TopDirectoryOnly);
+                    SearchOption.TopDirectoryOnly)
+                    .Where(file =>
+                    {
+                        var name = Path.GetFileName(file.AsSpan());
+                        return name.StartsWith("Jellyfin.", StringComparison.OrdinalIgnoreCase)
+                            || name.StartsWith("MediaBrowser.", StringComparison.OrdinalIgnoreCase)
+                            || name.StartsWith("Emby.", StringComparison.OrdinalIgnoreCase);
+                    });
 
                 foreach (var xmlFile in xmlFiles)
                 {

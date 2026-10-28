@@ -207,6 +207,20 @@ ficou de fora:
 | 64 | Swagger carrega todos os `*.xml` do diretório base em memória para sempre após a primeira requisição. | `ApiServiceCollectionExtensions.cs:222-230` | Só os XML de API/Model, ou swagger opt-in. |
 | 65 | JSON sem source generation (`DefaultJsonTypeInfoResolver` por reflexão). | `JsonDefaults.cs` | `JsonSerializerContext` para BaseItemDto, QueryResult, SessionInfoDto e mensagens de websocket. Ganho moderado por causa dos conversores customizados. |
 
+**Status (2026-10-28):** implementada em um commit.
+
+- Item 62: `TieredPGO` e `TieredCompilation` explícitos e `PublishReadyToRun` quando o publish
+  recebe um RuntimeIdentifier. Modelo EF compilado em
+  `Jellyfin.Database.Providers.Sqlite/CompiledModel` (gerado com
+  `dotnet ef dbcontext optimize --configuration Release --no-build`), usado pelo provider SQLite;
+  o teste `CompiledModelTests` falha se o modelo gerado deixar de bater com a configuração, então
+  toda mudança de entidade exige regenerá-lo. GC continua workstation concorrente: DATAS é para
+  hosts com muitos núcleos e o alvo aqui é máquina pequena.
+- Item 63: `reloadConfigOnChange=false` no host principal.
+- Item 64: o Swagger só carrega os XML dos assemblies `Jellyfin.*`, `MediaBrowser.*` e `Emby.*`.
+- Item 65 (source generation do JSON): não feito. Os conversores customizados limitam o ganho e o
+  contrato de serialização dos DTOs é grande; fica como item isolado.
+
 ---
 
 ## Correções de robustez encontradas no caminho
