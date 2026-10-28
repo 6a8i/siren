@@ -88,7 +88,8 @@ namespace MediaBrowser.Providers.Manager
         private IMetadataSaver[] _savers = [];
         private IExternalId[] _externalIds = [];
         private IExternalUrlProvider[] _externalUrlProviders = [];
-        private bool _isProcessingRefreshQueue;
+        private readonly Dictionary<Guid, List<MetadataRefreshOptions>> _queuedRefreshes = new();
+        private int _activeRefreshProcessors;
         private bool _disposed;
 
         /// <summary>
@@ -1145,21 +1146,47 @@ namespace MediaBrowser.Providers.Manager
                 return;
             }
 
-            // PriorityQueue is not thread safe and the processor dequeues concurrently, so every
+            // PriorityQueue is not thread safe and the processors dequeue concurrently, so every
             // touch of the queue takes the lock.
             lock (_refreshQueueLock)
             {
-                _refreshQueue.Enqueue((itemId, options), priority);
-
-                if (_isProcessingRefreshQueue)
+                // A refresh already waiting for this item that is at least as thorough makes this one
+                // redundant: the queue used to fill with one entry per change event of the same item.
+                if (_queuedRefreshes.TryGetValue(itemId, out var queued)
+                    && queued.Any(existing => Covers(existing, options)))
                 {
                     return;
                 }
 
-                _isProcessingRefreshQueue = true;
+                _refreshQueue.Enqueue((itemId, options), priority);
+                (queued ?? (_queuedRefreshes[itemId] = [])).Add(options);
+
+                if (_activeRefreshProcessors >= GetRefreshConcurrency())
+                {
+                    return;
+                }
+
+                _activeRefreshProcessors++;
             }
 
             Task.Run(StartProcessingRefreshQueue);
+        }
+
+        private static bool Covers(MetadataRefreshOptions existing, MetadataRefreshOptions incoming)
+        {
+            return existing.MetadataRefreshMode >= incoming.MetadataRefreshMode
+                && existing.ImageRefreshMode >= incoming.ImageRefreshMode
+                && (existing.ReplaceAllMetadata || !incoming.ReplaceAllMetadata)
+                && (existing.ReplaceAllImages || !incoming.ReplaceAllImages)
+                && (existing.ForceSave || !incoming.ForceSave)
+                && (existing.ReplaceImages.Count >= incoming.ReplaceImages.Count);
+        }
+
+        private int GetRefreshConcurrency()
+        {
+            // Unset keeps the historical single consumer; the setting caps how many items refresh at once.
+            var configured = _configurationManager.Configuration.LibraryMetadataRefreshConcurrency;
+            return configured <= 0 ? 1 : Math.Min(configured, 8);
         }
 
         private async Task StartProcessingRefreshQueue()
@@ -1170,7 +1197,7 @@ namespace MediaBrowser.Providers.Manager
             {
                 lock (_refreshQueueLock)
                 {
-                    _isProcessingRefreshQueue = false;
+                    _activeRefreshProcessors--;
                 }
 
                 return;
@@ -1192,8 +1219,17 @@ namespace MediaBrowser.Providers.Manager
                         || cancellationToken.IsCancellationRequested
                         || !_refreshQueue.TryDequeue(out refreshItem, out _))
                     {
-                        _isProcessingRefreshQueue = false;
+                        _activeRefreshProcessors--;
                         break;
+                    }
+
+                    if (_queuedRefreshes.TryGetValue(refreshItem.ItemId, out var queued))
+                    {
+                        queued.Remove(refreshItem.RefreshOptions);
+                        if (queued.Count == 0)
+                        {
+                            _queuedRefreshes.Remove(refreshItem.ItemId);
+                        }
                     }
                 }
 

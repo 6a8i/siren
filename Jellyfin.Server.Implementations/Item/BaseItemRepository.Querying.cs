@@ -583,6 +583,39 @@ public sealed partial class BaseItemRepository
     }
 
     /// <inheritdoc />
+    public IReadOnlyList<BaseItemDto> RetrieveItems(IReadOnlyList<Guid> ids)
+    {
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        // Same shape as RetrieveItem (every owned collection loaded), for a set of ids in one round trip.
+        using var context = _dbProvider.CreateDbContext();
+        var dbQuery = PrepareItemQuery(context, new()
+        {
+            DtoOptions = new()
+            {
+                EnableImages = true
+            }
+        });
+        dbQuery = dbQuery.Include(e => e.TrailerTypes)
+            .Include(e => e.Provider)
+            .Include(e => e.LockedFields)
+            .Include(e => e.UserData)
+            .Include(e => e.Images)
+            .Include(e => e.LinkedChildEntities)
+            .AsSplitQuery();
+
+        return dbQuery
+            .WhereOneOrMany(ids, e => e.Id)
+            .AsEnumerable()
+            .Select(e => DeserializeBaseItem(e))
+            .OfType<BaseItemDto>()
+            .ToArray();
+    }
+
+    /// <inheritdoc />
     public bool GetIsPlayed(User user, Guid id, bool recursive)
     {
         using var dbContext = _dbProvider.CreateDbContext();

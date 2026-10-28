@@ -23,6 +23,17 @@ namespace MediaBrowser.Controller.Dto
             .Except(DefaultExcludedFields)
             .ToArray();
 
+        private IReadOnlyList<ItemFields> _fields = [];
+        private ulong _fieldMask;
+
+        static DtoOptions()
+        {
+            if (Enum.GetValues<ItemFields>().Length > 64)
+            {
+                throw new InvalidOperationException("ItemFields no longer fits the DtoOptions field mask");
+            }
+        }
+
         /// <summary>
         /// Initializes a new instance of the <see cref="DtoOptions"/> class with all fields enabled.
         /// </summary>
@@ -63,7 +74,23 @@ namespace MediaBrowser.Controller.Dto
         /// <summary>
         /// Gets or sets the fields to populate on the DTO.
         /// </summary>
-        public IReadOnlyList<ItemFields> Fields { get; set; }
+        public IReadOnlyList<ItemFields> Fields
+        {
+            get => _fields;
+            set
+            {
+                _fields = value;
+
+                // Membership is asked dozens of times per item, so the list is folded into a bit mask once.
+                ulong mask = 0;
+                foreach (var itemField in value)
+                {
+                    mask |= 1UL << (int)itemField;
+                }
+
+                _fieldMask = mask;
+            }
+        }
 
         /// <summary>
         /// Gets or sets the image types to populate on the DTO.
@@ -101,7 +128,7 @@ namespace MediaBrowser.Controller.Dto
         /// <param name="field">The field to check.</param>
         /// <returns><c>true</c> if the field is populated; otherwise, <c>false</c>.</returns>
         public bool ContainsField(ItemFields field)
-            => Fields.Contains(field);
+            => (_fieldMask & (1UL << (int)field)) != 0;
 
         /// <summary>
         /// Gets the number of images to return for the specified image type.

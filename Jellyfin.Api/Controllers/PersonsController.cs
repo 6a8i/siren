@@ -120,9 +120,7 @@ public class PersonsController : BaseJellyfinApiController
         return new QueryResult<BaseItemDto>(
             peopleItems.StartIndex,
             peopleItems.TotalRecordCount,
-            peopleItems.Items
-                .Select(person => _dtoService.GetItemByNameDto(person, dtoOptions, null, user))
-                .ToArray());
+            _dtoService.GetItemByNameDtos(peopleItems.Items, dtoOptions, user));
     }
 
     // People are not owned by a library, so nothing in the Peoples table says which of them a user is

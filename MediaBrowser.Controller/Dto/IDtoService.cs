@@ -54,5 +54,16 @@ namespace MediaBrowser.Controller.Dto
         /// <param name="user">The user.</param>
         /// <returns>The item dto.</returns>
         BaseItemDto GetItemByNameDto(BaseItem item, DtoOptions options, List<BaseItem>? taggedItems, User? user = null);
+
+        /// <summary>
+        /// Converts a page of by-name items (artists, genres, studios, people, years) to DTOs in one pass,
+        /// batching the per-item lookups the way <see cref="GetBaseItemDtos"/> does. Item counts are left
+        /// to the caller, which fetched them alongside the items.
+        /// </summary>
+        /// <param name="items">The items, already filtered for the user.</param>
+        /// <param name="options">The options.</param>
+        /// <param name="user">The user.</param>
+        /// <returns>The DTOs, in the order of <paramref name="items"/>.</returns>
+        IReadOnlyList<BaseItemDto> GetItemByNameDtos(IReadOnlyList<BaseItem> items, DtoOptions options, User? user = null);
     }
 }

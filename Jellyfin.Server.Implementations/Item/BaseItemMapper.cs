@@ -320,7 +320,8 @@ public static class BaseItemMapper
         entity.Height = dto.Height;
         entity.Provider = dto.ProviderIds.Select(e => new BaseItemProvider()
         {
-            Item = entity,
+            Item = null!,
+            ItemId = entity.Id,
             ProviderId = e.Key,
             ProviderValue = e.Value
         }).ToList();
@@ -342,7 +343,7 @@ public static class BaseItemMapper
             .Select(e => new BaseItemMetadataField()
             {
                 Id = (int)e,
-                Item = entity,
+                Item = null!,
                 ItemId = entity.Id
             })
             .ToArray() : null;
@@ -403,7 +404,7 @@ public static class BaseItemMapper
             entity.TrailerTypes = trailer.TrailerTypes?.Select(e => new BaseItemTrailerType()
             {
                 Id = (int)e,
-                Item = entity,
+                Item = null!,
                 ItemId = entity.Id
             }).ToArray() ?? [];
         }

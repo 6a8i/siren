@@ -25,7 +25,9 @@ public class DotIgnoreIgnoreRule : IResolverIgnoreRule
     /// </summary>
     public DotIgnoreIgnoreRule()
     {
-        var cacheSize = Math.Max(100, Environment.ProcessorCount * 100);
+        // One entry per directory seen during a scan; sized in absolute terms rather than by CPU count.
+        const int CacheSize = 4096;
+        var cacheSize = CacheSize;
         _directoryCache = new FastConcurrentLru<string, IgnoreFileCacheEntry>(
             Environment.ProcessorCount,
             cacheSize,

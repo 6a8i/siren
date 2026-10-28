@@ -158,10 +158,12 @@ public static class RequestHelpers
         IDtoService dtoService,
         User? user)
     {
-        var dtos = result.Items.Select(i =>
+        var dtos = dtoService.GetItemByNameDtos(result.Items.Select(i => i.Item).ToList(), dtoOptions, user);
+
+        for (var index = 0; index < dtos.Count; index++)
         {
-            var (baseItem, counts) = i;
-            var dto = dtoService.GetItemByNameDto(baseItem, dtoOptions, null, user);
+            var counts = result.Items[index].ItemCounts;
+            var dto = dtos[index];
 
             if (counts is not null)
             {
@@ -176,13 +178,11 @@ public static class RequestHelpers
                 dto.ArtistCount = counts.ArtistCount;
                 dto.MusicVideoCount = counts.MusicVideoCount;
             }
-
-            return dto;
-        });
+        }
 
         return new QueryResult<BaseItemDto>(
             result.StartIndex,
             result.TotalRecordCount,
-            dtos.ToArray());
+            dtos);
     }
 }

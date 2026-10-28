@@ -40,7 +40,7 @@ namespace Emby.Server.Implementations.Library
         {
             _config = config;
             _repository = repository;
-            _cache = new FastConcurrentLru<string, UserItemData>(Environment.ProcessorCount, _config.Configuration.CacheSize, StringComparer.OrdinalIgnoreCase);
+            _cache = new FastConcurrentLru<string, UserItemData>(Environment.ProcessorCount, Math.Max(1000, _config.Configuration.UserDataCacheSize), StringComparer.OrdinalIgnoreCase);
         }
 
         /// <inheritdoc />
@@ -58,15 +58,23 @@ namespace Emby.Server.Implementations.Library
             var keys = item.GetUserDataKeys();
 
             using var dbContext = _repository.CreateDbContext();
-            using var transaction = dbContext.Database.BeginTransaction();
+
+            // One query for every row this user holds on the item, tracked: rows under the item's keys
+            // are updated in place (the change tracker emits only the columns that differ), rows under
+            // keys the item no longer reports get the same values, and missing keys are inserted.
+            // Those extra rows are kept, not deleted: the key set is briefly incomplete mid-refresh,
+            // and they are what a deleted and re-added item reattaches by.
+            var storedRows = dbContext.UserData
+                .Where(e => e.ItemId == item.Id && e.UserId == user.Id)
+                .ToDictionary(e => e.CustomDataKey, StringComparer.Ordinal);
 
             foreach (var key in keys)
             {
                 userData.Key = key;
                 var userDataEntry = Map(userData, user.Id, item.Id);
-                if (dbContext.UserData.Any(f => f.ItemId == userDataEntry.ItemId && f.UserId == userDataEntry.UserId && f.CustomDataKey == userDataEntry.CustomDataKey))
+                if (storedRows.Remove(key, out var storedRow))
                 {
-                    dbContext.UserData.Attach(userDataEntry).State = EntityState.Modified;
+                    dbContext.Entry(storedRow).CurrentValues.SetValues(userDataEntry);
                 }
                 else
                 {
@@ -74,29 +82,28 @@ namespace Emby.Server.Implementations.Library
                 }
             }
 
+            foreach (var staleRow in storedRows.Values)
+            {
+                userData.Key = staleRow.CustomDataKey;
+                dbContext.Entry(staleRow).CurrentValues.SetValues(Map(userData, user.Id, item.Id));
+            }
+
             dbContext.SaveChanges();
-
-            // Rows under keys the item no longer reports are kept, not deleted: the key set is briefly
-            // incomplete mid-refresh, and those rows are what a deleted and re-added item reattaches by.
-            dbContext.UserData
-                .Where(e => e.ItemId == item.Id && e.UserId == user.Id && !keys.Contains(e.CustomDataKey))
-                .ExecuteUpdate(e => e
-                    .SetProperty(f => f.AudioStreamIndex, userData.AudioStreamIndex)
-                    .SetProperty(f => f.IsFavorite, userData.IsFavorite)
-                    .SetProperty(f => f.LastPlayedDate, userData.LastPlayedDate)
-                    .SetProperty(f => f.Likes, userData.Likes)
-                    .SetProperty(f => f.PlaybackPositionTicks, userData.PlaybackPositionTicks)
-                    .SetProperty(f => f.PlayCount, userData.PlayCount)
-                    .SetProperty(f => f.Played, userData.Played)
-                    .SetProperty(f => f.Rating, userData.Rating)
-                    .SetProperty(f => f.SubtitleStreamIndex, userData.SubtitleStreamIndex));
-
-            transaction.Commit();
 
             var userId = user.InternalId;
             var cacheKey = GetCacheKey(userId, item.Id);
             _cache.AddOrUpdate(cacheKey, userData);
-            item.UserData = dbContext.UserData.Where(e => e.ItemId == item.Id).AsNoTracking().ToArray(); // rehydrate the cached userdata
+
+            // Rehydrate the item's cached user data without another query: this user's rows are the
+            // ones just written, every other user's rows are untouched.
+            var savedRows = dbContext.ChangeTracker.Entries<UserData>()
+                .Select(e => e.Entity)
+                .Where(e => e.ItemId == item.Id && e.UserId == user.Id)
+                .ToList();
+            item.UserData = (item.UserData ?? [])
+                .Where(e => e.UserId != user.Id)
+                .Concat(savedRows)
+                .ToArray();
 
             UserDataSaved?.Invoke(this, new UserDataSaveEventArgs
             {

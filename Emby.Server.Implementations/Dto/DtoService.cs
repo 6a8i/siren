@@ -162,6 +162,24 @@ namespace Emby.Server.Implementations.Dto
             User? user = null,
             BaseItem? owner = null,
             bool skipVisibilityCheck = false)
+            => GetBaseItemDtosInternal(items, options, user, owner, skipVisibilityCheck, includeItemCounts: true);
+
+        /// <inheritdoc />
+        public IReadOnlyList<BaseItemDto> GetItemByNameDtos(IReadOnlyList<BaseItem> items, DtoOptions options, User? user = null)
+        {
+            // By-name items (artists, genres, studios, people, years) come straight from a query that
+            // already applied the user's access filter, and their callers set the counts they fetched
+            // alongside the items, so neither the visibility check nor the counts batch runs here.
+            return GetBaseItemDtosInternal(items, options, user, owner: null, skipVisibilityCheck: true, includeItemCounts: false);
+        }
+
+        private IReadOnlyList<BaseItemDto> GetBaseItemDtosInternal(
+            IReadOnlyList<BaseItem> items,
+            DtoOptions options,
+            User? user,
+            BaseItem? owner,
+            bool skipVisibilityCheck,
+            bool includeItemCounts)
         {
             var accessibleItems = skipVisibilityCheck || user is null ? items : items.Where(x => x.IsVisible(user)).ToList();
             var returnItems = new BaseItemDto[accessibleItems.Count];
@@ -188,7 +206,8 @@ namespace Emby.Server.Implementations.Dto
 
             // Batch-fetch by-name item counts to avoid N+1 queries
             Dictionary<Guid, ItemCounts>? itemCountsBatch = null;
-            if (options.ContainsField(ItemFields.ItemCounts))
+            includeItemCounts = includeItemCounts && options.ContainsField(ItemFields.ItemCounts);
+            if (includeItemCounts)
             {
                 itemCountsBatch = GetItemCountsBatch(accessibleItems, user);
             }
@@ -305,7 +324,7 @@ namespace Emby.Server.Implementations.Dto
                     (programTuples ??= []).Add((item, dto));
                 }
 
-                if (options.ContainsField(ItemFields.ItemCounts))
+                if (includeItemCounts)
                 {
                     SetItemByNameInfo(dto, user, itemCountsBatch);
                 }

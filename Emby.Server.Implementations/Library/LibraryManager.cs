@@ -2315,14 +2315,43 @@ namespace Emby.Server.Implementations.Library
             var linkedIds = _linkedChildrenService.GetLinkedChildrenIds(video.Id, (int)MediaBrowser.Controller.Entities.LinkedChildType.LinkedAlternateVersion);
             if (linkedIds.Count > 0)
             {
-                return linkedIds
-                    .Select(id => GetItemById(id))
-                    .Where(i => i is not null)
+                return GetItemsByIds(linkedIds)
                     .OfType<Video>()
                     .OrderBy(i => i.SortName);
             }
 
             return [];
+        }
+
+        /// <summary>
+        /// Resolves items by id through the cache, loading every miss in a single query.
+        /// </summary>
+        private List<BaseItem> GetItemsByIds(IReadOnlyList<Guid> ids)
+        {
+            var items = new List<BaseItem>(ids.Count);
+            List<Guid>? misses = null;
+            foreach (var id in ids)
+            {
+                if (_cache.TryGet(id, out var cached))
+                {
+                    items.Add(cached);
+                }
+                else
+                {
+                    (misses ??= []).Add(id);
+                }
+            }
+
+            if (misses is not null)
+            {
+                foreach (var item in _itemRepository.RetrieveItems(misses))
+                {
+                    RegisterItem(item);
+                    items.Add(item);
+                }
+            }
+
+            return items;
         }
 
         /// <inheritdoc />
@@ -2533,7 +2562,10 @@ namespace Emby.Server.Implementations.Library
         {
             if (image.Path is not null && image.IsLocalFile)
             {
-                if (image.Width == 0 || image.Height == 0 || string.IsNullOrEmpty(image.BlurHash))
+                // An image that was never processed has no stamp. One that was processed and still has
+                // no size or hash could not be read (SVG, unsupported format, corrupt file): retrying
+                // it on every scan just repeats the failure, so it is only retried when the file changes.
+                if (image.DateModified == default)
                 {
                     return true;
                 }

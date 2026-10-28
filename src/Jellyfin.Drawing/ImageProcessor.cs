@@ -1,10 +1,12 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Mime;
-using System.Reflection.Metadata.Ecma335;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -450,7 +452,32 @@ public sealed class ImageProcessor : IImageProcessor, IDisposable
 
     /// <inheritdoc />
     public string GetImageCacheTag(string baseItemPath, DateTime imageDateModified)
-        => (baseItemPath + imageDateModified.Ticks).GetMD5().ToString("N", CultureInfo.InvariantCulture);
+    {
+        // Hashes the same UTF-16 bytes as (path + ticks).GetMD5() did, so tags stay stable, without
+        // allocating the concatenated string, its byte array and the intermediate Guid formatting.
+        var path = baseItemPath.AsSpan();
+        Span<char> ticks = stackalloc char[20];
+        imageDateModified.Ticks.TryFormat(ticks, out var ticksLength, default, CultureInfo.InvariantCulture);
+
+        var length = path.Length + ticksLength;
+        char[]? rented = null;
+        Span<char> buffer = length <= 512 ? stackalloc char[512] : (rented = ArrayPool<char>.Shared.Rent(length));
+        buffer = buffer[..length];
+        path.CopyTo(buffer);
+        ticks[..ticksLength].CopyTo(buffer[path.Length..]);
+
+        Span<byte> hash = stackalloc byte[16];
+#pragma warning disable CA5351 // MD5 is the established tag format, not used for security.
+        MD5.HashData(MemoryMarshal.AsBytes(buffer), hash);
+#pragma warning restore CA5351
+
+        if (rented is not null)
+        {
+            ArrayPool<char>.Shared.Return(rented);
+        }
+
+        return new Guid(hash).ToString("N", CultureInfo.InvariantCulture);
+    }
 
     /// <inheritdoc />
     public string GetImageCacheTag(BaseItem item, ItemImageInfo image)

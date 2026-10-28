@@ -25,6 +25,13 @@ public interface IItemRepository
     BaseItem RetrieveItem(Guid id);
 
     /// <summary>
+    /// Retrieves a set of items by id in one query, loaded exactly as <see cref="RetrieveItem"/> loads one.
+    /// </summary>
+    /// <param name="ids">The ids.</param>
+    /// <returns>The items that exist, in no particular order.</returns>
+    IReadOnlyList<BaseItem> RetrieveItems(IReadOnlyList<Guid> ids);
+
+    /// <summary>
     /// Gets the items.
     /// </summary>
     /// <param name="filter">The query.</param>

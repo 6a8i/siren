@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations;
@@ -335,30 +336,53 @@ public class ItemPersistenceService : IItemPersistenceService
         using var transaction = context.Database.BeginTransaction();
 
         var ids = tuples.Select(f => f.Item.Id).ToArray();
-        var existingItems = context.BaseItems.WhereOneOrMany(ids, e => e.Id).Select(f => f.Id).ToHashSet();
+
+        // Stored rows are loaded tracked so the change tracker diffs them against the mapped values:
+        // an unchanged item then costs no UPDATE at all, and a changed one updates only the columns
+        // that differ instead of rewriting every column and every index on the table.
+        var storedEntities = context.BaseItems.WhereOneOrMany(ids, e => e.Id).ToDictionary(e => e.Id);
+        var existingItems = storedEntities.Keys.ToHashSet();
+
+        var storedProviders = LoadOwnedRows(context.BaseItemProviders, existingItems, e => e.ItemId);
+        var storedLockedFields = LoadOwnedRows(context.BaseItemMetadataFields, existingItems, e => e.ItemId);
+        var storedTrailerTypes = LoadOwnedRows(context.BaseItemTrailerTypes, existingItems, e => e.ItemId);
 
         foreach (var item in tuples)
         {
             var entity = BaseItemMapper.Map(item.Item, _appHost);
             entity.TopParentId = item.TopParent?.Id;
 
-            if (!existingItems.Contains(entity.Id))
+            if (!storedEntities.TryGetValue(entity.Id, out var stored))
             {
                 context.BaseItems.Add(entity);
+                continue;
             }
-            else
+
+            context.Entry(stored).CurrentValues.SetValues(entity);
+
+            SyncOwnedRows(
+                context.BaseItemProviders,
+                storedProviders.GetValueOrDefault(entity.Id),
+                entity.Provider,
+                e => e.ProviderId,
+                (storedRow, incoming) => storedRow.ProviderValue = incoming.ProviderValue);
+            SyncOwnedRows(
+                context.BaseItemMetadataFields,
+                storedLockedFields.GetValueOrDefault(entity.Id),
+                entity.LockedFields,
+                e => e.Id,
+                null);
+            SyncOwnedRows(
+                context.BaseItemTrailerTypes,
+                storedTrailerTypes.GetValueOrDefault(entity.Id),
+                entity.TrailerTypes,
+                e => e.Id,
+                null);
+
+            // Image rows carry a generated key, so they are still rewritten (cleared below).
+            if (entity.Images is { Count: > 0 })
             {
-                if (entity.Images is { Count: > 0 })
-                {
-                    context.BaseItemImageInfos.AddRange(entity.Images);
-                }
-
-                if (entity.LockedFields is { Count: > 0 })
-                {
-                    context.BaseItemMetadataFields.AddRange(entity.LockedFields);
-                }
-
-                context.BaseItems.Attach(entity).State = EntityState.Modified;
+                context.BaseItemImageInfos.AddRange(entity.Images);
             }
         }
 
@@ -477,13 +501,10 @@ public class ItemPersistenceService : IItemPersistenceService
             }
         }
 
-        // Owned rows of updated items are rewritten wholesale; cleared in one statement per table.
+        // Image rows of updated items are rewritten wholesale; cleared in one statement.
         if (existingItems.Count > 0)
         {
-            var updatedIds = existingItems.ToArray();
-            context.BaseItemProviders.WhereOneOrMany(updatedIds, e => e.ItemId).ExecuteDelete();
-            context.BaseItemImageInfos.WhereOneOrMany(updatedIds, e => e.ItemId).ExecuteDelete();
-            context.BaseItemMetadataFields.WhereOneOrMany(updatedIds, e => e.ItemId).ExecuteDelete();
+            context.BaseItemImageInfos.WhereOneOrMany(existingItems.ToArray(), e => e.ItemId).ExecuteDelete();
         }
 
         context.SaveChanges();
@@ -788,6 +809,69 @@ public class ItemPersistenceService : IItemPersistenceService
 
         context.SaveChanges();
         transaction.Commit();
+    }
+
+    /// <summary>
+    /// Loads the tracked owned rows of the given items, grouped by item.
+    /// </summary>
+    private static Dictionary<Guid, List<TRow>> LoadOwnedRows<TRow>(DbSet<TRow> set, HashSet<Guid> itemIds, Expression<Func<TRow, Guid>> itemId)
+        where TRow : class
+    {
+        if (itemIds.Count == 0)
+        {
+            return [];
+        }
+
+        var itemIdSelector = itemId.Compile();
+        return set
+            .WhereOneOrMany(itemIds.ToArray(), itemId)
+            .AsEnumerable()
+            .GroupBy(itemIdSelector)
+            .ToDictionary(g => g.Key, g => g.ToList());
+    }
+
+    /// <summary>
+    /// Brings the stored owned rows of one item in line with the mapped ones: rows that are gone are
+    /// deleted, new ones inserted and the rest updated in place (which the change tracker turns into
+    /// no statement at all when nothing differs).
+    /// </summary>
+    private static void SyncOwnedRows<TRow, TKey>(
+        DbSet<TRow> set,
+        List<TRow>? stored,
+        ICollection<TRow>? incoming,
+        Func<TRow, TKey> keySelector,
+        Action<TRow, TRow>? applyValues)
+        where TRow : class
+        where TKey : notnull
+    {
+        var pending = new Dictionary<TKey, TRow>();
+        if (incoming is not null)
+        {
+            foreach (var row in incoming)
+            {
+                pending[keySelector(row)] = row;
+            }
+        }
+
+        if (stored is not null)
+        {
+            foreach (var storedRow in stored)
+            {
+                if (pending.Remove(keySelector(storedRow), out var incomingRow))
+                {
+                    applyValues?.Invoke(storedRow, incomingRow);
+                }
+                else
+                {
+                    set.Remove(storedRow);
+                }
+            }
+        }
+
+        if (pending.Count > 0)
+        {
+            set.AddRange(pending.Values);
+        }
     }
 
     private static List<(ItemValueType MagicNumber, string Value)> GetItemValuesToSave(BaseItemDto item, List<string> inheritedTags)
