@@ -1,6 +1,10 @@
 using System;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
+using System.Runtime.Loader;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AutoFixture;
@@ -13,6 +17,7 @@ using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Updates;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using Xunit;
 
 namespace Jellyfin.Server.Implementations.Tests.Plugins
@@ -369,6 +374,131 @@ namespace Jellyfin.Server.Implementations.Tests.Plugins
             // as a stand-in for the version the user disabled.
             Assert.Equal(PluginStatus.Superseded, pluginManager.LoadManifest(oldDir).Manifest.Status);
             Assert.Equal(PluginStatus.Disabled, pluginManager.LoadManifest(newDir).Manifest.Status);
+        }
+
+        [Fact]
+        public void Inspect_AssemblyReferencingTheServer_IsAPluginAssembly()
+        {
+            var kind = PluginAssemblyInspector.Inspect(typeof(PluginManagerTests).Assembly.Location, out var name);
+
+            Assert.Equal(PluginAssemblyInspector.Kind.Plugin, kind);
+            Assert.Equal("Jellyfin.Server.Implementations.Tests", name);
+        }
+
+        [Fact]
+        public void Inspect_AssemblyWithoutServerReference_IsADependency()
+        {
+            var kind = PluginAssemblyInspector.Inspect(typeof(Mock).Assembly.Location, out var name);
+
+            Assert.Equal(PluginAssemblyInspector.Kind.Dependency, kind);
+            Assert.Equal("Moq", name);
+        }
+
+        [Fact]
+        public void Inspect_FileThatIsNoAssembly_IsNotManaged()
+        {
+            var path = Path.Combine(_pluginPath, "native.dll");
+            File.WriteAllBytes(path, new byte[] { 0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00 });
+
+            Assert.Equal(PluginAssemblyInspector.Kind.NotManaged, PluginAssemblyInspector.Inspect(path, out var name));
+            Assert.Null(name);
+
+            FileHelper.CreateEmpty(path);
+            Assert.Equal(PluginAssemblyInspector.Kind.NotManaged, PluginAssemblyInspector.Inspect(path, out _));
+        }
+
+        [Fact]
+        public void LoadAssemblies_LoadsOnlyAssembliesReferencingTheServer_AndResolvesTheRestOnDemand()
+        {
+            var pluginRoot = Path.Combine(_tempPath, "plugins");
+            var pluginDir = CreateTestPlugin(pluginRoot, "Fake", PluginStatus.Active);
+            File.Delete(Path.Combine(pluginDir, "some.dll"));
+
+            // Three files, as a real plugin folder has them: the plugin itself (it references the server),
+            // a library it ships and a native library. Only the first is a plugin assembly.
+            var helperPath = Path.Combine(pluginDir, "Fake.Helper.dll");
+            var pluginPath = Path.Combine(pluginDir, "Jellyfin.Plugin.Fake.dll");
+            EmitHelperAssembly(helperPath);
+            EmitPluginAssembly(pluginPath, helperPath);
+            FileHelper.CreateEmpty(Path.Combine(pluginDir, "native.dll"));
+
+            var pluginManager = new PluginManager(new NullLogger<PluginManager>(), null!, null!, pluginRoot, new Version(1, 0));
+            var plugin = Assert.Single(pluginManager.Plugins);
+            Assert.Equal(3, plugin.DllFiles.Count);
+
+            var assembly = Assert.Single(pluginManager.LoadAssemblies());
+
+            Assert.Equal("Jellyfin.Plugin.Fake", assembly.GetName().Name);
+            Assert.Equal(PluginStatus.Active, plugin.Manifest.Status);
+
+            // The types were walked once at load time and are handed out from there.
+            var types = pluginManager.GetLoadedTypes(assembly);
+            Assert.NotNull(types);
+            var marker = Assert.Single(types, t => t.FullName == "Jellyfin.Plugin.Fake.Marker");
+            Assert.Null(pluginManager.GetLoadedTypes(typeof(PluginManagerTests).Assembly));
+
+            // The helper was not loaded up front...
+            var context = AssemblyLoadContext.GetLoadContext(assembly);
+            Assert.NotNull(context);
+            Assert.DoesNotContain(context.Assemblies, a => string.Equals(a.GetName().Name, "Fake.Helper", StringComparison.Ordinal));
+
+            // ...but the first reference to it resolves the plugin's own copy into the plugin's context.
+            var helperType = marker.GetMethod("Use")!.GetParameters()[0].ParameterType;
+            Assert.Equal("Fake.Helper.Util", helperType.FullName);
+            Assert.Same(context, AssemblyLoadContext.GetLoadContext(helperType.Assembly));
+            Assert.Equal(helperPath, helperType.Assembly.Location);
+            Assert.Contains(context.Assemblies, a => string.Equals(a.GetName().Name, "Fake.Helper", StringComparison.Ordinal));
+        }
+
+        [Fact]
+        public void LoadAssemblies_PluginWithoutAnyManagedAssembly_IsMalfunctioned()
+        {
+            var pluginRoot = Path.Combine(_tempPath, "plugins");
+            var pluginDir = CreateTestPlugin(pluginRoot, "Broken", PluginStatus.Active);
+
+            var pluginManager = new PluginManager(new NullLogger<PluginManager>(), null!, null!, pluginRoot, new Version(1, 0));
+
+            // some.dll is an empty file: nothing to load, and the plugin is disabled as it was before.
+            Assert.Empty(pluginManager.LoadAssemblies());
+            Assert.Equal(PluginStatus.Malfunctioned, pluginManager.LoadManifest(pluginDir).Manifest.Status);
+        }
+
+        /// <summary>
+        /// Writes an assembly with one public type and no reference to the server: what a library a
+        /// plugin ships looks like.
+        /// </summary>
+        private static void EmitHelperAssembly(string path)
+        {
+            var builder = new PersistedAssemblyBuilder(new AssemblyName("Fake.Helper"), typeof(object).Assembly);
+            var module = builder.DefineDynamicModule("Fake.Helper");
+            module.DefineType("Fake.Helper.Util", TypeAttributes.Public | TypeAttributes.Class).CreateType();
+            builder.Save(path);
+        }
+
+        /// <summary>
+        /// Writes an assembly that references the server (a field typed with a server interface) and the
+        /// helper (a method parameter, which nothing resolves until the method is looked at).
+        /// </summary>
+        private static void EmitPluginAssembly(string path, string helperPath)
+        {
+            var scratch = new AssemblyLoadContext(null, isCollectible: true);
+            try
+            {
+                var helperType = scratch.LoadFromAssemblyPath(helperPath).GetType("Fake.Helper.Util", throwOnError: true)!;
+
+                var builder = new PersistedAssemblyBuilder(new AssemblyName("Jellyfin.Plugin.Fake"), typeof(object).Assembly);
+                var module = builder.DefineDynamicModule("Jellyfin.Plugin.Fake");
+                var marker = module.DefineType("Jellyfin.Plugin.Fake.Marker", TypeAttributes.Public | TypeAttributes.Class);
+                marker.DefineField("Plugin", typeof(IPlugin), FieldAttributes.Public);
+                var use = marker.DefineMethod("Use", MethodAttributes.Public | MethodAttributes.Static, typeof(void), [helperType]);
+                use.GetILGenerator().Emit(OpCodes.Ret);
+                marker.CreateType();
+                builder.Save(path);
+            }
+            finally
+            {
+                scratch.Unload();
+            }
         }
 
         private string CreateTestPlugin(string root, string folderName, PluginStatus status, Version? version = null, Guid? id = null, string? name = null)

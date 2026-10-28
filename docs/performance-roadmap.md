@@ -145,7 +145,14 @@ ficou de fora:
   `Channel` com um consumidor, e overflow de buffer refaz o watcher e agenda refresh da raiz.
 - Item 59: fan-out em `Clamp(ProcessorCount - 2, 2, 8)`.
 - Item 60: só o tamanho do cache; o mapa top-down não.
-- Item 61 (carga de plugins): não feito.
+- Item 61: feito em 2026-10-28. `PluginManager` lê os metadados de cada DLL da pasta do plugin com
+  `System.Reflection.Metadata`, sem carregá-la, e só carrega e percorre (`GetTypes()`, uma vez) as
+  que referenciam `MediaBrowser.*`, `Jellyfin.*` ou `Emby.*`; o `ApplicationHost` recebe esses tipos
+  prontos (`IPluginManager.GetLoadedTypes`) em vez de chamar `GetExportedTypes()` de novo. As demais
+  DLLs gerenciadas ficam registradas por nome no `PluginLoadContext` e entram na primeira
+  referência, com a cópia do plugin vencendo a do servidor como antes. DLLs que não são assembly
+  .NET (nativas, arquivos quebrados) são puladas em vez de derrubar o plugin; um plugin sem
+  nenhuma DLL que referencie o servidor carrega todas, como antes, com um aviso no log.
 - Robustez: `MediaSourceManager` agora abre o cache dentro do `try` (e só se o arquivo existe).
 
 ### Caches de identidade e autenticação

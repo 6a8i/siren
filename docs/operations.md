@@ -148,6 +148,25 @@ aos **domingos às 03:00** e pode ser reagendada ou disparada no painel como qua
   não muda nada) ou `--restore-archive <caminho>` na linha de comando. O servidor reinicia e
   aplica o arquivo antes de subir.
 
+## Carga de plugins
+
+Na inicialização o servidor lê os metadados de cada `.dll` da pasta de cada plugin ativo (ou só
+das listadas em `assemblies` no `meta.json`, quando há lista) sem carregá-la, e separa:
+
+- **Assembly do plugin:** referencia `MediaBrowser.*`, `Jellyfin.*` ou `Emby.*`. É carregada na
+  hora, tem todos os tipos percorridos uma vez (é essa passagem que detecta um plugin compilado
+  contra uma versão incompatível e o marca como `NotSupported`) e é onde o servidor procura as
+  partes do plugin. Log: `Loaded assembly <nome> from <caminho>`.
+- **Biblioteca do plugin:** assembly .NET sem referência ao servidor (Newtonsoft, HtmlAgilityPack,
+  cópias de bibliotecas do framework). Fica registrada por nome e é carregada na primeira
+  referência, dentro do contexto do plugin; a cópia do plugin vence a do servidor, como sempre foi.
+- **Outros arquivos:** bibliotecas nativas e arquivos que não são assembly são ignorados (linha
+  em nível Debug), sem desativar o plugin.
+
+Um plugin cujas DLLs não referenciam o servidor carrega todas elas, como antes, com o aviso
+`No assembly of plugin <nome> references the server; loading all N of them`. Um plugin sem nenhuma
+DLL .NET é marcado `Malfunctioned` (`None of the files of plugin <nome> is a .NET assembly`).
+
 ## Métricas
 
 `EnableMetrics` em `config/system.xml` (padrão `false`) expõe `/metrics` (abaixo do `BaseUrl`) no

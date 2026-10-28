@@ -42,6 +42,7 @@ namespace Emby.Server.Implementations.Plugins
         private readonly ServerConfiguration _config;
         private readonly List<LocalPlugin> _plugins;
         private readonly Version _minimumVersion;
+        private readonly Dictionary<Assembly, Type[]> _loadedTypes = new();
 
         private IHttpClientFactory? _httpClientFactory;
 
@@ -127,13 +128,21 @@ namespace Emby.Server.Implementations.Plugins
                     continue;
                 }
 
-                var assemblyLoadContext = new PluginLoadContext(plugin.Path);
+                if (!TrySortPluginDlls(plugin, out var pluginAssemblyFiles, out var assemblyPaths))
+                {
+                    continue;
+                }
+
+                // Only the assemblies that reference the server can carry plugin parts, so only they are
+                // loaded and walked here; the libraries the plugin ships resolve through the context the
+                // first time one of its assemblies refers to them, with the plugin's copy winning as before.
+                var assemblyLoadContext = new PluginLoadContext(plugin.Path, assemblyPaths);
                 _assemblyLoadContexts.Add(assemblyLoadContext);
 
-                var assemblies = new List<Assembly>(plugin.DllFiles.Count);
+                var assemblies = new List<Assembly>(pluginAssemblyFiles.Count);
                 var loadedAll = true;
 
-                foreach (var file in plugin.DllFiles)
+                foreach (var file in pluginAssemblyFiles)
                 {
                     try
                     {
@@ -164,10 +173,12 @@ namespace Emby.Server.Implementations.Plugins
 
                 foreach (var assembly in assemblies)
                 {
+                    Type[] types;
                     try
                     {
-                        // Load all required types to verify that the plugin will load
-                        assembly.GetTypes();
+                        // Load all types once: it verifies that the plugin will load, and the host takes
+                        // its parts from this array instead of reflecting over the assembly again.
+                        types = assembly.GetTypes();
                     }
                     catch (SystemException ex) when (ex is TypeLoadException or ReflectionTypeLoadException) // Undocumented exception
                     {
@@ -184,10 +195,19 @@ namespace Emby.Server.Implementations.Plugins
                         break;
                     }
 
+                    _loadedTypes[assembly] = types;
                     _logger.LogInformation("Loaded assembly {Assembly} from {Path}", assembly.FullName, assembly.Location);
                     yield return assembly;
                 }
             }
+        }
+
+        /// <inheritdoc />
+        public IReadOnlyList<Type>? GetLoadedTypes(Assembly assembly)
+        {
+            ArgumentNullException.ThrowIfNull(assembly);
+
+            return _loadedTypes.TryGetValue(assembly, out var types) ? types : null;
         }
 
         /// <summary>
@@ -930,6 +950,60 @@ namespace Emby.Server.Implementations.Plugins
                 whitelistedDlls = pluginDlls;
             }
 
+            return true;
+        }
+
+        /// <summary>
+        /// Sorts a plugin's DLLs by what their metadata says they are, without loading any of them.
+        /// </summary>
+        /// <param name="plugin">The plugin.</param>
+        /// <param name="pluginAssemblyFiles">The DLLs to load and walk for parts: the ones that reference the server, in manifest order.</param>
+        /// <param name="assemblyPaths">Every managed DLL by assembly name, for the load context to resolve on demand.</param>
+        /// <returns>
+        /// <see langword="false"/> when there is nothing to load and the plugin was marked as malfunctioned.
+        /// </returns>
+        private bool TrySortPluginDlls(LocalPlugin plugin, out List<string> pluginAssemblyFiles, out Dictionary<string, string> assemblyPaths)
+        {
+            pluginAssemblyFiles = new List<string>(plugin.DllFiles.Count);
+            assemblyPaths = new Dictionary<string, string>(plugin.DllFiles.Count, StringComparer.OrdinalIgnoreCase);
+            List<string>? dependencyFiles = null;
+
+            foreach (var file in plugin.DllFiles)
+            {
+                switch (PluginAssemblyInspector.Inspect(file, out var assemblyName))
+                {
+                    case PluginAssemblyInspector.Kind.Plugin:
+                        pluginAssemblyFiles.Add(file);
+                        assemblyPaths.TryAdd(assemblyName!, file);
+                        break;
+                    case PluginAssemblyInspector.Kind.Dependency:
+                        (dependencyFiles ??= []).Add(file);
+                        assemblyPaths.TryAdd(assemblyName!, file);
+                        break;
+                    default:
+                        // A native library the plugin needs, or a file nothing can be done with; either way
+                        // it is not an assembly to load, and the plugin is not at fault for shipping it.
+                        _logger.LogDebug("Skipping {Path} of plugin {Name}: not a .NET assembly", file, plugin.Name);
+                        break;
+                }
+            }
+
+            if (pluginAssemblyFiles.Count > 0)
+            {
+                return true;
+            }
+
+            if (dependencyFiles is null)
+            {
+                _logger.LogError("None of the files of plugin {Name} is a .NET assembly. Disabling plugin", plugin.Name);
+                ChangePluginState(plugin, PluginStatus.Malfunctioned);
+                return false;
+            }
+
+            // Nothing references the server, so nothing would be found by walking the types either; load
+            // all of them as before rather than guess which one the author meant.
+            _logger.LogWarning("No assembly of plugin {Name} references the server; loading all {Count} of them", plugin.Name, dependencyFiles.Count);
+            pluginAssemblyFiles.AddRange(dependencyFiles);
             return true;
         }
 

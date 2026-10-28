@@ -30,6 +30,14 @@ namespace MediaBrowser.Common.Plugins
         IEnumerable<Assembly> LoadAssemblies();
 
         /// <summary>
+        /// Gets the types of an assembly that <see cref="LoadAssemblies"/> returned. They were walked
+        /// once when the assembly was loaded, so nobody has to reflect over it again.
+        /// </summary>
+        /// <param name="assembly">The assembly.</param>
+        /// <returns>Its types, or <see langword="null"/> when the assembly is not a loaded plugin assembly.</returns>
+        IReadOnlyList<Type>? GetLoadedTypes(Assembly assembly);
+
+        /// <summary>
         /// Registers the plugin's services with the DI.
         /// Note: DI is not yet instantiated yet.
         /// </summary>

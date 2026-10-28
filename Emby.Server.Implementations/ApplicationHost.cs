@@ -768,6 +768,22 @@ namespace Emby.Server.Implementations
         {
             foreach (var ass in assemblies)
             {
+                // A plugin assembly had every type walked when it was loaded; the visible ones are what
+                // GetExportedTypes would return. Only the server's own assemblies are reflected over here.
+                var loadedTypes = _pluginManager.GetLoadedTypes(ass);
+                if (loadedTypes is not null)
+                {
+                    foreach (var type in loadedTypes)
+                    {
+                        if (type.IsVisible && type.IsClass && !type.IsAbstract && !type.IsGenericType)
+                        {
+                            yield return type;
+                        }
+                    }
+
+                    continue;
+                }
+
                 Type[] exportedTypes;
                 try
                 {
