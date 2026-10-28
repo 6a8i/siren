@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -12,6 +13,10 @@ namespace Jellyfin.Server.Implementations.Security
     public class AuthenticationManager : IAuthenticationManager
     {
         private readonly IDbContextFactory<JellyfinDbContext> _dbProvider;
+
+        // API keys change only through this class, so the whole (tiny) table is kept in memory and
+        // dropped on every write. A token that is absent is a miss, so unknown tokens cost nothing.
+        private volatile Dictionary<string, AuthenticationInfo>? _apiKeysByToken;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="AuthenticationManager"/> class.
@@ -32,16 +37,9 @@ namespace Jellyfin.Server.Implementations.Security
                 dbContext.ApiKeys.Add(apiKey);
 
                 await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                _apiKeysByToken = null;
 
-                return new AuthenticationInfo
-                {
-                    AppName = apiKey.Name,
-                    AccessToken = apiKey.AccessToken,
-                    DateCreated = apiKey.DateCreated,
-                    DeviceId = string.Empty,
-                    DeviceName = string.Empty,
-                    AppVersion = string.Empty
-                };
+                return ToAuthenticationInfo(apiKey);
             }
         }
 
@@ -65,6 +63,26 @@ namespace Jellyfin.Server.Implementations.Security
         }
 
         /// <inheritdoc />
+        public AuthenticationInfo? GetApiKeyByToken(string accessToken)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(accessToken);
+
+            var keys = _apiKeysByToken;
+            if (keys is null)
+            {
+                using var dbContext = _dbProvider.CreateDbContext();
+                keys = dbContext.ApiKeys
+                    .AsNoTracking()
+                    .AsEnumerable()
+                    .Select(ToAuthenticationInfo)
+                    .ToDictionary(key => key.AccessToken, StringComparer.Ordinal);
+                _apiKeysByToken = keys;
+            }
+
+            return keys.GetValueOrDefault(accessToken);
+        }
+
+        /// <inheritdoc />
         public async Task DeleteApiKey(string accessToken)
         {
             var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
@@ -75,6 +93,21 @@ namespace Jellyfin.Server.Implementations.Security
                     .ExecuteDeleteAsync()
                     .ConfigureAwait(false);
             }
+
+            _apiKeysByToken = null;
+        }
+
+        private static AuthenticationInfo ToAuthenticationInfo(ApiKey apiKey)
+        {
+            return new AuthenticationInfo
+            {
+                AppName = apiKey.Name,
+                AccessToken = apiKey.AccessToken,
+                DateCreated = apiKey.DateCreated,
+                DeviceId = string.Empty,
+                DeviceName = string.Empty,
+                AppVersion = string.Empty
+            };
         }
     }
 }

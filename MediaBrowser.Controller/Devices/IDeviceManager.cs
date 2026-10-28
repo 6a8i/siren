@@ -58,6 +58,13 @@ public interface IDeviceManager
     QueryResult<Device> GetDevices(DeviceQuery query);
 
     /// <summary>
+    /// Gets the device that owns an access token.
+    /// </summary>
+    /// <param name="accessToken">The access token.</param>
+    /// <returns>The device, or <c>null</c> when no device holds the token.</returns>
+    Device? GetDeviceByAccessToken(string accessToken);
+
+    /// <summary>
     /// Gets device information based on the provided query.
     /// </summary>
     /// <param name="query">The device query.</param>

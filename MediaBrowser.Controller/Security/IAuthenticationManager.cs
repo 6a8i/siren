@@ -22,6 +22,13 @@ namespace MediaBrowser.Controller.Security
         Task<IReadOnlyList<AuthenticationInfo>> GetApiKeys();
 
         /// <summary>
+        /// Gets the API key that holds an access token.
+        /// </summary>
+        /// <param name="accessToken">The access token.</param>
+        /// <returns>The key, or <c>null</c> when no API key holds the token.</returns>
+        AuthenticationInfo? GetApiKeyByToken(string accessToken);
+
+        /// <summary>
         /// Deletes an API key with the provided access token.
         /// </summary>
         /// <param name="accessToken">The access token.</param>

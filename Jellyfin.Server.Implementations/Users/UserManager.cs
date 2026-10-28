@@ -53,6 +53,8 @@ namespace Jellyfin.Server.Implementations.Users
 
         private readonly LockHelper _userLock = new();
 
+        private volatile UserSnapshot? _usersSnapshot;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="UserManager"/> class.
         /// </summary>
@@ -96,22 +98,10 @@ namespace Jellyfin.Server.Implementations.Users
         public event EventHandler<GenericEventArgs<User>>? OnUserUpdated;
 
         /// <inheritdoc/>
-        public IEnumerable<User> GetUsers()
-        {
-            using var dbContext = _dbProvider.CreateDbContext();
-            return UserQuery(dbContext)
-                .ToArray();
-        }
+        public IEnumerable<User> GetUsers() => GetSnapshot().Users;
 
         /// <inheritdoc/>
-        public IEnumerable<Guid> GetUsersIds()
-        {
-            using var dbContext = _dbProvider.CreateDbContext();
-            return dbContext.Users
-                .AsNoTracking()
-                .Select(user => user.Id)
-                .ToArray();
-        }
+        public IEnumerable<Guid> GetUsersIds() => GetSnapshot().ById.Keys;
 
         // This is some regex that matches only on unicode "word" characters, as well as -, _ and @
         // In theory this will cut out most if not all 'control' characters which should help minimize any weirdness
@@ -127,15 +117,14 @@ namespace Jellyfin.Server.Implementations.Users
                 throw new ArgumentException("Guid can't be empty", nameof(id));
             }
 
-            using var dbContext = _dbProvider.CreateDbContext();
-            return UserQuery(dbContext)
-                .FirstOrDefault(user => user.Id == id);
+            return GetSnapshot().ById.GetValueOrDefault(id);
         }
 
         private static IQueryable<User> UserQuery(JellyfinDbContext dbContext)
         {
+            // Split queries: a single query multiplies the user row by permissions × preferences × schedules.
             return dbContext.Users
-                            .AsSingleQuery()
+                            .AsSplitQuery()
                             .Include(user => user.Permissions)
                             .Include(user => user.Preferences)
                             .Include(user => user.AccessSchedules)
@@ -143,11 +132,40 @@ namespace Jellyfin.Server.Implementations.Users
                             .AsNoTracking();
         }
 
+        /// <summary>
+        /// Gets the in-memory snapshot of all users, loading it on first use.
+        /// </summary>
+        /// <remarks>
+        /// Every authenticated request resolves its user several times (authentication, policy handlers,
+        /// controllers). The user table is tiny and changes rarely, so the whole table is kept in memory and
+        /// dropped by every write path in this class. Instances handed out are shared between callers: a
+        /// caller that mutates one must persist it through <see cref="UpdateUserAsync"/>, as they already do.
+        /// </remarks>
+        private UserSnapshot GetSnapshot()
+        {
+            var snapshot = _usersSnapshot;
+            if (snapshot is not null)
+            {
+                return snapshot;
+            }
+
+            using var dbContext = _dbProvider.CreateDbContext();
+            var users = UserQuery(dbContext)
+                .OrderBy(user => user.InternalId)
+                .ToArray();
+
+            snapshot = new UserSnapshot(users, users.ToDictionary(user => user.Id));
+            _usersSnapshot = snapshot;
+            return snapshot;
+        }
+
+        private void InvalidateUserCache() => _usersSnapshot = null;
+
         /// <inheritdoc/>
         public User? GetFirstUser()
         {
-            using var dbContext = _dbProvider.CreateDbContext();
-            return UserQuery(dbContext).FirstOrDefault();
+            var users = GetSnapshot().Users;
+            return users.Length == 0 ? null : users[0];
         }
 
         /// <inheritdoc/>
@@ -158,11 +176,16 @@ namespace Jellyfin.Server.Implementations.Users
                 throw new ArgumentException("Invalid username", nameof(name));
             }
 
-            using var dbContext = _dbProvider.CreateDbContext();
-#pragma warning disable CA1862 // Use the 'StringComparison' method overloads to perform case-insensitive string comparisons
-            return UserQuery(dbContext)
-                .FirstOrDefault(u => u.NormalizedUsername == name.ToUpperInvariant());
-#pragma warning restore CA1862 // Use the 'StringComparison' method overloads to perform case-insensitive string comparisons
+            var normalized = name.ToUpperInvariant();
+            foreach (var user in GetSnapshot().Users)
+            {
+                if (string.Equals(user.NormalizedUsername, normalized, StringComparison.Ordinal))
+                {
+                    return user;
+                }
+            }
+
+            return null;
         }
 
         /// <inheritdoc/>
@@ -256,6 +279,7 @@ namespace Jellyfin.Server.Implementations.Users
                     }
 
                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                    InvalidateUserCache();
                 }
             }
         }
@@ -360,6 +384,7 @@ namespace Jellyfin.Server.Implementations.Users
 
                 dbContext.Users.Add(newUser);
                 await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                InvalidateUserCache();
             }
 
             await _eventManager.PublishAsync(new UserCreatedEventArgs(newUser)).ConfigureAwait(false);
@@ -409,6 +434,7 @@ namespace Jellyfin.Server.Implementations.Users
 
                     dbContext.Users.Remove(user);
                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                    InvalidateUserCache();
                 }
             }
 
@@ -442,6 +468,7 @@ namespace Jellyfin.Server.Implementations.Users
 
                     await GetAuthenticationProvider(dbUser).ChangePassword(dbUser, newPassword).ConfigureAwait(false);
                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                    InvalidateUserCache();
                 }
             }
 
@@ -704,6 +731,8 @@ namespace Jellyfin.Server.Implementations.Users
                 }
             }
 
+            InvalidateUserCache();
+
             return success ? user : null;
         }
 
@@ -768,6 +797,7 @@ namespace Jellyfin.Server.Implementations.Users
 
                 dbContext.Users.Add(newUser);
                 await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                InvalidateUserCache();
             }
         }
 
@@ -840,6 +870,7 @@ namespace Jellyfin.Server.Implementations.Users
 
                     dbContext.Update(user);
                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                    InvalidateUserCache();
                 }
             }
         }
@@ -919,6 +950,7 @@ namespace Jellyfin.Server.Implementations.Users
 
                     dbContext.Update(user);
                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                    InvalidateUserCache();
                 }
             }
 
@@ -953,6 +985,7 @@ namespace Jellyfin.Server.Implementations.Users
                         dbContext.Remove(dbUser.ProfileImage);
                         dbUser.ProfileImage = null;
                         await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                        InvalidateUserCache();
                     }
                 }
 
@@ -1094,6 +1127,7 @@ namespace Jellyfin.Server.Implementations.Users
             dbContext.Users.Attach(user);
             dbContext.Entry(user).State = EntityState.Modified;
             await dbContext.SaveChangesAsync().ConfigureAwait(false);
+            InvalidateUserCache();
         }
 
         /// <inheritdoc/>
@@ -1114,6 +1148,8 @@ namespace Jellyfin.Server.Implementations.Users
                 _userLock.Dispose();
             }
         }
+
+        private sealed record UserSnapshot(User[] Users, Dictionary<Guid, User> ById);
 
         internal sealed class LockHelper : IDisposable
         {

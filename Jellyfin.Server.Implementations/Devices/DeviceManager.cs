@@ -32,6 +32,7 @@ namespace Jellyfin.Server.Implementations.Devices
         private readonly IUserManager _userManager;
         private readonly ConcurrentDictionary<string, ClientCapabilities> _capabilitiesMap = new();
         private readonly ConcurrentDictionary<int, Device> _devices;
+        private readonly ConcurrentDictionary<string, Device> _devicesByToken;
         private readonly ConcurrentDictionary<string, DeviceOptions> _deviceOptions;
 
         /// <summary>
@@ -44,6 +45,7 @@ namespace Jellyfin.Server.Implementations.Devices
             _dbProvider = dbProvider;
             _userManager = userManager;
             _devices = new ConcurrentDictionary<int, Device>();
+            _devicesByToken = new ConcurrentDictionary<string, Device>(StringComparer.Ordinal);
             _deviceOptions = new ConcurrentDictionary<string, DeviceOptions>();
 
             using var dbContext = _dbProvider.CreateDbContext();
@@ -52,6 +54,7 @@ namespace Jellyfin.Server.Implementations.Devices
                          .AsEnumerable())
             {
                 _devices.TryAdd(device.Id, device);
+                _devicesByToken[device.AccessToken] = device;
             }
 
             foreach (var deviceOption in dbContext.DeviceOptions
@@ -103,9 +106,18 @@ namespace Jellyfin.Server.Implementations.Devices
                 dbContext.Devices.Add(device);
                 await dbContext.SaveChangesAsync().ConfigureAwait(false);
                 _devices.TryAdd(device.Id, device);
+                _devicesByToken[device.AccessToken] = device;
             }
 
             return device;
+        }
+
+        /// <inheritdoc />
+        public Device? GetDeviceByAccessToken(string accessToken)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(accessToken);
+
+            return _devicesByToken.GetValueOrDefault(accessToken);
         }
 
         /// <inheritdoc />
@@ -145,10 +157,14 @@ namespace Jellyfin.Server.Implementations.Devices
         /// <inheritdoc />
         public QueryResult<Device> GetDevices(DeviceQuery query)
         {
-            IEnumerable<Device> devices = _devices.Values
+            // A token identifies one device, so a token query is an index lookup, not a scan.
+            IEnumerable<Device> candidates = query.AccessToken is null
+                ? _devices.Values
+                : _devicesByToken.TryGetValue(query.AccessToken, out var byToken) ? [byToken] : [];
+
+            IEnumerable<Device> devices = candidates
                 .Where(device => !query.UserId.HasValue || device.UserId.Equals(query.UserId.Value))
                 .Where(device => query.DeviceId is null || device.DeviceId == query.DeviceId)
-                .Where(device => query.AccessToken is null || device.AccessToken == query.AccessToken)
                 .OrderBy(d => d.Id)
                 .ToList();
             var count = devices.Count();
@@ -210,6 +226,7 @@ namespace Jellyfin.Server.Implementations.Devices
         public async Task DeleteDevice(Device device)
         {
             _devices.TryRemove(device.Id, out _);
+            _devicesByToken.TryRemove(device.AccessToken, out _);
             var dbContext = await _dbProvider.CreateDbContextAsync().ConfigureAwait(false);
             await using (dbContext.ConfigureAwait(false))
             {
@@ -231,6 +248,7 @@ namespace Jellyfin.Server.Implementations.Devices
             }
 
             _devices[device.Id] = device;
+            _devicesByToken[device.AccessToken] = device;
         }
 
         /// <inheritdoc />

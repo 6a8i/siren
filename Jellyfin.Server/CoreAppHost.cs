@@ -96,7 +96,7 @@ namespace Jellyfin.Server
 
             serviceCollection.AddSingleton<IAuthorizationContext, AuthorizationContext>();
 
-            serviceCollection.AddScoped<IAuthenticationManager, AuthenticationManager>();
+            serviceCollection.AddSingleton<IAuthenticationManager, AuthenticationManager>();
 
             foreach (var type in GetExportTypes<ILyricProvider>())
             {
