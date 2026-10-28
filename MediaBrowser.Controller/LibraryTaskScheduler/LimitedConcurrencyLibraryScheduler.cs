@@ -171,8 +171,9 @@ public sealed class LimitedConcurrencyLibraryScheduler : ILimitedConcurrencyLibr
         var fanoutConcurrency = _serverConfigurationManager.Configuration.LibraryScanFanoutConcurrency;
         if (fanoutConcurrency <= 0)
         {
-            // in case the user did not set a limit manually, we can assume he has 3 or more cores as already checked by ShouldForceSequentialOperation.
-            return Environment.ProcessorCount - 3;
+            // Unset: scale with the cores left over, but never below two workers (4 cores used to get
+            // one) and never beyond eight, where the disk and the probe pool are the limit anyway.
+            return Math.Clamp(Environment.ProcessorCount - 2, 2, 8);
         }
 
         return fanoutConcurrency;

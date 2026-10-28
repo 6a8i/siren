@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Emby.Server.Implementations.Library;
 using MediaBrowser.Controller.Configuration;
@@ -47,6 +48,17 @@ namespace Emby.Server.Implementations.IO
         /// </summary>
         private int _watcherGeneration;
 
+        /// <summary>
+        /// Paths reported by the watchers, handed to one consumer. Bounded so a burst (a large copy,
+        /// an overflow refresh) cannot grow without limit; the newest paths win, since a lost event
+        /// on a path that is still changing is reported again by the next event on it.
+        /// </summary>
+        private readonly Channel<string> _changes = Channel.CreateBounded<string>(new BoundedChannelOptions(10_000)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true
+        });
+
         private bool _disposed;
 
         /// <summary>
@@ -77,6 +89,8 @@ namespace Emby.Server.Implementations.IO
 
             appLifetime.ApplicationStarted.Register(Start);
             appLifetime.ApplicationStopping.Register(Dispose);
+
+            _ = Task.Run(ProcessChangesAsync);
         }
 
         /// <inheritdoc />
@@ -252,16 +266,16 @@ namespace Emby.Server.Implementations.IO
             {
                 try
                 {
+                    // Names and the last write cover every change the library acts on. Size and
+                    // attribute notifications fired once per buffer flush while a file was being
+                    // copied in, which is what used to overflow the watcher buffer.
                     var newWatcher = new FileSystemWatcher(path, "*")
                     {
                         IncludeSubdirectories = true,
                         InternalBufferSize = 65536,
-                        NotifyFilter = NotifyFilters.CreationTime |
-                                       NotifyFilters.DirectoryName |
+                        NotifyFilter = NotifyFilters.DirectoryName |
                                        NotifyFilters.FileName |
-                                       NotifyFilters.LastWrite |
-                                       NotifyFilters.Size |
-                                       NotifyFilters.Attributes
+                                       NotifyFilters.LastWrite
                     };
 
                     newWatcher.Created += OnWatcherChanged;
@@ -348,9 +362,19 @@ namespace Emby.Server.Implementations.IO
                 return;
             }
 
-            _logger.LogError(ex, "Error in Directory watcher for: {Path}", dw.Path);
+            var path = dw.Path;
+            _logger.LogError(ex, "Error in Directory watcher for: {Path}", path);
 
             DisposeWatcher(dw, true);
+
+            if (ex is InternalBufferOverflowException && !_disposed)
+            {
+                // Events were lost, so the whole root is refreshed, and watching resumes: it used to
+                // stop silently until the next scan or restart.
+                _logger.LogWarning("Directory watcher buffer overflowed for {Path}; refreshing the path and restarting the watcher", path);
+                _changes.Writer.TryWrite(path);
+                StartWatchingPath(path);
+            }
         }
 
         /// <summary>
@@ -360,13 +384,23 @@ namespace Emby.Server.Implementations.IO
         /// <param name="e">The <see cref="FileSystemEventArgs" /> instance containing the event data.</param>
         private void OnWatcherChanged(object sender, FileSystemEventArgs e)
         {
-            try
+            // The watcher raises this on its own thread and drops events when its buffer fills while
+            // a handler runs, so the path is only queued here; the work happens on the consumer.
+            _changes.Writer.TryWrite(e.FullPath);
+        }
+
+        private async Task ProcessChangesAsync()
+        {
+            await foreach (var path in _changes.Reader.ReadAllAsync().ConfigureAwait(false))
             {
-                ReportFileSystemChanged(e.FullPath);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Exception in ReportFileSystemChanged. Path: {FullPath}", e.FullPath);
+                try
+                {
+                    ReportFileSystemChanged(path);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Exception in ReportFileSystemChanged. Path: {FullPath}", path);
+                }
             }
         }
 
@@ -523,6 +557,7 @@ namespace Emby.Server.Implementations.IO
 
             // Set before stopping so anything racing us stops handing out new work.
             _disposed = true;
+            _changes.Writer.TryComplete();
             Stop();
         }
     }

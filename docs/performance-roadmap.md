@@ -91,6 +91,56 @@ API/HTTP, scan e mídia). Exceções e partes deixadas para a Onda 2:
 
 Mudanças maiores que exigem testes mais cuidadosos. Cada uma vale um PR próprio.
 
+**Status (2026-10-28):** implementada em quatro commits (identidade e autenticação, persistência e
+DTOs, transcodificação e imagens, scan e monitor). O que foi feito de forma diferente da tabela ou
+ficou de fora:
+
+- Item 32: feito como snapshot de toda a tabela de usuários em memória (ela é pequena), derrubado
+  por todo caminho de escrita do UserManager; `AsSplitQuery` na consulta. Não há mais leitura de
+  usuário no banco por requisição.
+- Item 33: índice por token no DeviceManager, cache das API keys no AuthenticationManager (que
+  passou a singleton); o AuthorizationContext não abre mais DbContext.
+- Item 34: a entidade armazenada é carregada rastreada e recebe `SetValues`, então o UPDATE só
+  tem as colunas que mudaram (ou nenhum). Providers, locked fields e trailer types são
+  reconciliados linha a linha; as imagens continuam reescritas porque têm chave gerada.
+- Item 35 (índices de BaseItems) e 37/38 (colunas promovidas do JSON, FTS5): não feitos.
+  Precisam de medição em banco de produção e de migração; ficam para a Onda 3.
+- Item 36: uma consulta por `(ItemId, UserId)` e atualização por `SetValues`; o `item.UserData`
+  é rehidratado sem consulta extra. Os índices de UserData não foram tocados (migração).
+- Item 39 (serialização do `Data`) e 40 (helpers de descendentes): não feitos; o 39 muda o
+  formato gravado e o 40 pede cache com invalidação que ainda não foi desenhada.
+- Item 41: `RetrieveItems` em lote no repositório; versões alternativas resolvem os cache misses
+  em uma consulta.
+- Item 42: `CacheSize` passou a 5000 absoluto e surgiu `UserDataCacheSize` (20000); cache do
+  `.ignore` em 4096. Instalações existentes mantêm o `CacheSize` gravado no XML.
+- Item 43: `GetItemByNameDtos` em lote, usado pelos endpoints de artistas, gêneros, estúdios e
+  pessoas. Years continua por item porque recebe os itens marcados.
+- Item 44 (campos mínimos por endpoint) e 45 (memoização de ids por nome): não feitos; o lote de
+  pessoas já existia no `GetBaseItemDtos`.
+- Item 46: cache tag sem alocação intermediária, mesmo valor de antes (não há cache por imagem).
+- Item 48: fila deduplicada por item quando já há um refresh igual ou mais forte pendente;
+  `LibraryMetadataRefreshConcurrency` passa a valer (0 continua = 1 consumidor).
+- Item 49: espera pelo segmento fora do lock da playlist; o último segmento é achado por
+  enumeração filtrada pelo prefixo e maior índice, sem stat por arquivo. Subdiretório por job não.
+- Item 50: throttling e deleção de segmentos ligados por padrão (só para configurações novas).
+  Detecção de hardware no primeiro boot não.
+- Item 51: pool próprio de extração (`ProcessorCount/2`, 1 a 4), `-threads` limitado a 4,
+  `thumbnail=n=12`, `File.Move` nos capítulos. Capítulos em uma única execução não.
+- Item 52 (tiles do trickplay direto no ffmpeg): não feito.
+- Item 53: as sondagens do ffmpeg rodam em paralelo; cache do resultado entre boots não.
+- Item 54: decode reduzido via `SKCodec.GetScaledDimensions` quando a saída é menor que a origem
+  (JPEG decodifica a 1/2, 1/4, 1/8).
+- Item 55: imagem só é reprocessada quando nunca foi (sem `DateModified`) ou quando o arquivo
+  mudou; falhas de blurhash/dimensão não se repetem a cada scan.
+- Item 56 (backoff de falhas de refresh): não feito, precisa de coluna nova.
+- Item 57: `ItemExistsAsync` só para item nunca salvo. O stat extra continua.
+- Item 58: filtros do watcher reduzidos a nomes e última escrita, eventos enfileirados em um
+  `Channel` com um consumidor, e overflow de buffer refaz o watcher e agenda refresh da raiz.
+- Item 59: fan-out em `Clamp(ProcessorCount - 2, 2, 8)`.
+- Item 60: só o tamanho do cache; o mapa top-down não.
+- Item 61 (carga de plugins): não feito.
+- Robustez: `MediaSourceManager` agora abre o cache dentro do `try` (e só se o arquivo existe).
+
 ### Caches de identidade e autenticação
 
 | # | Problema | Onde | Mudança |

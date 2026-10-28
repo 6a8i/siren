@@ -344,7 +344,9 @@ namespace MediaBrowser.Providers.Manager
 
             updateType |= item.OnMetadataChanged();
 
-            if (updateType == ItemUpdateType.None)
+            // An item that has been saved before is known to exist; only one that never was needs the
+            // check, which otherwise ran once per unchanged item on every scan.
+            if (updateType == ItemUpdateType.None && item.DateLastSaved == default)
             {
                 if (!await ItemRepository.ItemExistsAsync(item.Id).ConfigureAwait(false))
                 {
