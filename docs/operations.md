@@ -96,26 +96,32 @@ Os endpoints que recebem senha, PIN ou segredo do Quick Connect têm a política
 - `POST /Users/ForgotPassword` e `POST /Users/ForgotPassword/Pin`
 - `POST /Families/{familyId}/Members/{userId}/Switch` (troca de perfil com PIN)
 
-A regra é **10 tentativas por janela fixa de 60 segundos, por endereço IP do cliente**, sem fila.
-A décima primeira na mesma janela recebe `429 Too Many Requests` com `Retry-After` em segundos e
-gera uma linha de aviso no log:
+A regra é **N tentativas por janela fixa de 60 segundos, por endereço IP do cliente**, sem fila,
+com N em `AuthenticationRateLimitPerMinute` (`config/system.xml`, `ServerConfiguration`), padrão
+**10**; `0` desliga o limite. A tentativa seguinte à N-ésima na mesma janela recebe
+`429 Too Many Requests` com `Retry-After` em segundos e gera uma linha de aviso no log:
 
 ```
 Rate limit reached for /Users/AuthenticateByName by 203.0.113.7, rejecting with 429 for 42s
 ```
 
 O contador vive em memória e zera ao reiniciar; o limite conta tentativas, não falhas, então dez
-logins certos seguidos também disparam (nenhum cliente faz isso). Os números estão em
-`Jellyfin.Api/Constants/AuthenticationRateLimit.cs`, de propósito sem chave de configuração: mudar
-exige recompilar.
+logins certos seguidos também disparam (nenhum cliente faz isso). A janela de 60 s é fixa
+(`Jellyfin.Api/Constants/AuthenticationRateLimit.cs`); só a quantidade é configurável.
+
+A mudança vale sem reiniciar, mas por endereço: o valor é lido quando um IP aparece pela
+primeira vez ou volta depois de uma janela inteira sem tentativas (o limitador dele é descartado
+ao ficar ocioso). Um IP com tentativas na janela corrente mantém o limite com que começou até a
+janela zerar, no máximo 60 s. O mesmo vale para desligar com `0`.
 
 Pontos de atenção:
 
 - O endereço é `RemoteIpAddress` depois do middleware de `X-Forwarded-For`. Atrás de um proxy
   reverso, cadastre o proxy em `KnownProxies` (`config/network.xml`); sem isso todos os clientes
-  chegam com o IP do proxy e dividem as 10 tentativas por minuto.
+  chegam com o IP do proxy e dividem as N tentativas por minuto.
 - IPv6 conta por endereço, não por prefixo `/64`.
 - Quando a conexão não tem endereço (o `TestServer` dos testes de integração) nada é limitado.
+- `POST /System/CspReport` não entra na política: é anônimo e um navegador o chama sozinho.
 
 ## Backup agendado
 

@@ -32,6 +32,7 @@ using Jellyfin.Server.Configuration;
 using Jellyfin.Server.Filters;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Net;
+using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Model.Entities;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
@@ -128,17 +129,38 @@ namespace Jellyfin.Server.Extensions
         }
 
         /// <summary>
-        /// Picks the rate limit partition of a request under the authentication policy: a fixed window per
-        /// client address, or no limit when the connection carries no address (the in-memory test server).
+        /// Picks the rate limit partition of a request under the authentication policy, with the limit the
+        /// configuration holds right now. The rate limiter keeps one limiter per partition key and only
+        /// calls the factory when it creates one, so an address that is mid-window keeps the limit it
+        /// started with; it picks up a new value once it has been quiet for a window and was dropped.
         /// </summary>
         /// <param name="httpContext">The current HTTP context.</param>
         /// <returns>The partition the request is counted in.</returns>
         internal static RateLimitPartition<IPAddress> GetAuthenticationRateLimitPartition(HttpContext httpContext)
         {
+            var permitLimit = httpContext.RequestServices
+                .GetRequiredService<IServerConfigurationManager>()
+                .Configuration
+                .AuthenticationRateLimitPerMinute;
+
+            return GetAuthenticationRateLimitPartition(httpContext, permitLimit);
+        }
+
+        /// <summary>
+        /// Picks the rate limit partition of a request under the authentication policy: a fixed window per
+        /// client address, or no limit when the limit is zero or the connection carries no address (the
+        /// in-memory test server).
+        /// </summary>
+        /// <param name="httpContext">The current HTTP context.</param>
+        /// <param name="permitLimit">Attempts allowed per address and window; zero or less disables the limit.</param>
+        /// <returns>The partition the request is counted in.</returns>
+        internal static RateLimitPartition<IPAddress> GetAuthenticationRateLimitPartition(HttpContext httpContext, int permitLimit)
+        {
             // The forwarded-headers middleware runs first, so behind a known proxy this is already the client.
             var remoteIp = httpContext.Connection.RemoteIpAddress;
-            if (remoteIp is null)
+            if (remoteIp is null || permitLimit <= 0)
             {
+                // One shared no-op limiter: keying it by address would cache one per client for nothing.
                 return RateLimitPartition.GetNoLimiter(IPAddress.None);
             }
 
@@ -148,9 +170,9 @@ namespace Jellyfin.Server.Extensions
                 remoteIp = remoteIp.MapToIPv4();
             }
 
-            return RateLimitPartition.GetFixedWindowLimiter(remoteIp, static _ => new FixedWindowRateLimiterOptions
+            return RateLimitPartition.GetFixedWindowLimiter(remoteIp, _ => new FixedWindowRateLimiterOptions
             {
-                PermitLimit = AuthenticationRateLimit.PermitLimit,
+                PermitLimit = permitLimit,
                 Window = TimeSpan.FromSeconds(AuthenticationRateLimit.WindowSeconds),
                 QueueLimit = 0,
                 AutoReplenishment = true

@@ -255,6 +255,14 @@ public class ServerConfiguration : BaseApplicationConfiguration
     public ContentSecurityPolicyMode ContentSecurityPolicyMode { get; set; } = ContentSecurityPolicyMode.ReportOnly;
 
     /// <summary>
+    /// Gets or sets how many authentication attempts (password, PIN or quick connect secret) one client
+    /// address may make per minute before being answered with 429. Zero disables the limit. Read when an
+    /// address first shows up or comes back after a quiet minute; an address with attempts in the current
+    /// window keeps the limit it started with until that window is over.
+    /// </summary>
+    public int AuthenticationRateLimitPerMinute { get; set; } = 10;
+
+    /// <summary>
     /// Gets or sets the number of days we should retain activity logs.
     /// </summary>
     public int? ActivityLogRetentionDays { get; set; } = 30;
