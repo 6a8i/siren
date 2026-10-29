@@ -267,6 +267,7 @@ public class ServerConfiguration : BaseApplicationConfiguration
     /// holding the data, cache, transcoding or log directory. Zero disables the check.
     /// </summary>
     public int LowDiskSpaceWarningGb { get; set; } = 5;
+
     /// <summary>
     /// Gets or sets after how many days without activity a signed-in device (its access token) is
     /// signed out by the "Expire Inactive Sessions" task. Zero disables the expiry. API keys are
