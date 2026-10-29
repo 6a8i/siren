@@ -102,7 +102,43 @@ Legenda: **feito**, **planejado** (fase futura), **descartado** (com o motivo).
   tentativa), suíte Playwright (7 testes) e conferência no navegador do painel de rede, dos
   avatares, da seção "Assistindo agora" e da contagem regressiva do bloqueio.
 
-## Fase 2b (planejado)
+## Fase 2b-1 (concluída em 2026-10-28)
+
+### Servidor
+
+| # | Item | Estado | Como ficou |
+|---|------|--------|------------|
+| S24 | Perfil infantil | feito | `PermissionKind.IsChildProfile`, `UserPolicy.IsChildProfile`; nunca administrador da família nem do servidor (400) |
+| S25 | Histórico do que cada perfil assistiu | feito | `GET /Families/{id}/Members/{userId}/History` a partir dos dados de usuário, limitado ao que o perfil alcança |
+| S26 | Dispositivos por família com "desconectar" | feito | `GET /Families/{id}/Devices`, `DELETE /Families/{id}/Devices/{deviceId}` (revoga os tokens; entrada `FamilyDeviceRemoved` no log) |
+| S27 | Expiração de sessões inativas | feito | tarefa diária `ExpireInactiveSessions`, `InactiveSessionDays` (padrão 90; 0 desliga) |
+| S28 | Registro de IPs que batem no rate limit repetidamente | feito | 50 rejeições por hora → aviso no log e entrada `AuthenticationRateLimited` |
+| S29 | Chaves de API somente leitura | feito | `ApiKey.IsReadOnly`, migração `AddApiKeyReadOnly`, `POST /Auth/Keys?isReadOnly=`, `POST /Auth/Keys/{key}/ReadOnly`, 403 em qualquer método que não seja GET/HEAD/OPTIONS |
+| S30 | Backup no log de atividades e restauração conferida | feito | `BackupCreated`/`BackupFailed`; restauração de arquivos agendados verificada por teste |
+| S31 | Alerta de disco cheio | feito | tarefa diária `CheckDiskSpace`, `LowDiskSpaceWarningGb` (padrão 5), entrada `LowDiskSpace` uma vez por dia por unidade |
+
+### Cliente web
+
+| # | Item | Estado | Como ficou |
+|---|------|--------|------------|
+| W18 | Modo infantil | feito | sem busca e Chromecast, menu só com trocar de perfil e sair, tela inicial fixa (Minha mídia, Continuar assistindo, Recentes), chip "Infantil" |
+| W19 | PIN do administrador da família para sair ou abrir configurações de um perfil infantil | feito | `FamilyAdminPinDialog` + `useFamilyAdminPin` (verifica com `AuthenticateByName` e descarta o token) |
+| W20 | Histórico e dispositivos no modo gerenciar | feito | diálogo de histórico por perfil; seção "Dispositivos" com desconectar |
+| W21 | Foto própria como avatar | feito | recorte central em 256 px no diálogo de avatar |
+| W22 | Chaves somente leitura e página de backups | feito | coluna/alternância no painel de chaves; arquivos agendados marcados e aviso de reinício na restauração (tamanho do arquivo depende de campo no servidor) |
+| W23 | Suíte e2e ampliada | feito | 13 testes (família pelo painel, bibliotecas, avatar, bloqueio, chaves, backups, rede) |
+| W24 | Polyfills fora do `package.json` | feito | `whatwg-fetch`, `proxy-polyfill`, `element-closest-polyfill`, `classlist.js` removidos |
+| W25 | Testes dos componentes de família | feito | grid de perfis, prompts de PIN e lista de membros (323 testes no total) |
+
+### Verificação do lote 2b-1
+
+- Servidor: build Release e Debug da solução inteira, 4.352 testes aprovados, `dotnet format`
+  com analisadores.
+- Instância descartável: 23 checagens de API (perfil infantil, histórico, dispositivos,
+  chaves somente leitura, tarefas novas), suíte Playwright (13 testes) e conferência no
+  navegador do modo infantil com a guarda de PIN.
+
+## Fase 2b-2 (planejado)
 
 ### Servidor
 
@@ -111,33 +147,23 @@ Legenda: **feito**, **planejado** (fase futura), **descartado** (com o motivo).
   campos mínimos por endpoint (44), tiles de trickplay no ffmpeg (52), backoff de refresh com
   falha (56) e source generation do JSON (65). O banco atual tem 1 MB, então esses itens só
   valem com uma biblioteca grande para comparar.
-- Escopos para chaves de API (somente leitura, por biblioteca); exige migração própria.
+- Escopo de chave de API por biblioteca (a marca somente leitura já existe).
+- Tamanho do arquivo no manifesto de backup, para a página de backups mostrá-lo.
 - Segundo fator para o administrador do servidor, só no cliente web (os apps oficiais não
   sabem pedir o segundo fator).
 - Passar a CSP para `Enforce` depois de alguns dias sem violações no log, com teste de
   reprodução em todos os players.
-- Perfil infantil com interface simplificada (além do preset de classificação).
-- Restauração de backup pelo painel (hoje só pela API) e aviso quando a tarefa de backup
-  falha; alerta de disco cheio.
-- Histórico do que cada perfil assistiu, visível ao administrador da família; limite de
-  tempo de tela por perfil infantil.
-- Expiração automática de sessões antigas; lista de dispositivos por família com
-  "desconectar"; registro no log quando o rate limit bloqueia um IP repetidamente.
+- Limite de tempo de tela por perfil infantil.
 - Medição automática do tempo de boot no CI para pegar regressões.
 
 ### Cliente web
 
 - ~~Executar o workflow `e2e.yml` no GitHub~~ (passou na primeira execução, 2026-10-28) e
   ampliar a suíte (criação de família pelo painel, reprodução).
-- PIN também para entrar nas configurações de um perfil infantil.
 - "Continuar assistindo" por perfil no seletor; atalho de troca de perfil pelo controle
   remoto na TV.
-- Testes dos componentes de família (hoje só utilitários e hooks têm cobertura).
 - Migração das views legadas (login, wizard, cadastro e edição de usuários) para
   React e MUI.
-- Upload de uma foto própria como avatar (hoje só presets).
-- Remover as dependências de polyfill que sobraram no `package.json` e trocar o
-  `classList.replace` do slideshow para dispensar o `classlist.js`.
 - Tradução das strings novas para os demais idiomas do cliente (hoje só en-US e
   pt-BR; os outros caem no inglês). Adiada por decisão do dono do projeto; fica por último.
 - Seções da tela inicial por perfil já existem nas preferências de exibição do upstream;
