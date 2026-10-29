@@ -4,6 +4,9 @@ O que o servidor faz por conta própria para se proteger e se manter, e onde cad
 ligado ou desligado. Os caminhos de configuração são os do Jellyfin (`config/system.xml`,
 `config/network.xml`); os clientes continuam vendo um "Jellyfin Server".
 
+Instalação em Linux (pacote `.deb` com `siren.service`, tarball, caminhos, porta) e o processo de
+release estão em `docs/releases.md`.
+
 ## Cabeçalhos de segurança
 
 Toda resposta do servidor (API, web client, arquivos estáticos, erros, respostas sem corpo) sai com:
