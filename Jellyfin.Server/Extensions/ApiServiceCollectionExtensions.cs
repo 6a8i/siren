@@ -26,14 +26,18 @@ using Jellyfin.Api.Formatters;
 using Jellyfin.Api.Helpers;
 using Jellyfin.Api.ModelBinders;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions.Json;
 using Jellyfin.Server.Configuration;
 using Jellyfin.Server.Filters;
+using Jellyfin.Server.RateLimiting;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Net;
 using MediaBrowser.Controller.Configuration;
+using MediaBrowser.Model.Activity;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Globalization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -120,6 +124,9 @@ namespace Jellyfin.Server.Extensions
         /// <returns>The updated service collection.</returns>
         public static IServiceCollection AddJellyfinRateLimiting(this IServiceCollection serviceCollection)
         {
+            // One counter for the whole server: an address that keeps hitting the limit is reported once an hour.
+            serviceCollection.TryAddSingleton<AuthenticationRateLimitMonitor>();
+
             return serviceCollection.AddRateLimiter(options =>
             {
                 options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -179,7 +186,7 @@ namespace Jellyfin.Server.Extensions
             });
         }
 
-        private static ValueTask OnRateLimitRejected(OnRejectedContext context, CancellationToken cancellationToken)
+        private static async ValueTask OnRateLimitRejected(OnRejectedContext context, CancellationToken cancellationToken)
         {
             var httpContext = context.HttpContext;
             var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var untilReplenished)
@@ -187,17 +194,40 @@ namespace Jellyfin.Server.Extensions
                 : AuthenticationRateLimit.WindowSeconds;
             httpContext.Response.Headers.RetryAfter = retryAfter.ToString(CultureInfo.InvariantCulture);
 
-            httpContext.RequestServices
+            var logger = httpContext.RequestServices
                 .GetRequiredService<ILoggerFactory>()
-                .CreateLogger(typeof(ApiServiceCollectionExtensions).Namespace + ".RateLimiting")
-                .LogWarning(
-                    "Rate limit reached for {Path} by {RemoteIP}, rejecting with 429 for {RetryAfter}s",
-                    // url-encode to block log injection
-                    HttpUtility.UrlEncode(httpContext.Request.Path),
-                    httpContext.Connection.RemoteIpAddress,
-                    retryAfter);
+                .CreateLogger(typeof(ApiServiceCollectionExtensions).Namespace + ".RateLimiting");
+            var remoteIp = httpContext.Connection.RemoteIpAddress;
+            logger.LogWarning(
+                "Rate limit reached for {Path} by {RemoteIP}, rejecting with 429 for {RetryAfter}s",
+                // url-encode to block log injection
+                HttpUtility.UrlEncode(httpContext.Request.Path),
+                remoteIp,
+                retryAfter);
 
-            return ValueTask.CompletedTask;
+            // An address that keeps coming back is worth one warning and one activity-log entry an hour.
+            if (remoteIp is not null
+                && httpContext.RequestServices.GetService<AuthenticationRateLimitMonitor>() is { } monitor
+                && monitor.Record(remoteIp, DateTime.UtcNow, out var count))
+            {
+                logger.LogWarning("Authentication rate limit hit {Count} times in the last hour by {RemoteIP}", count, remoteIp);
+
+                var activityManager = httpContext.RequestServices.GetService<IActivityManager>();
+                var localization = httpContext.RequestServices.GetService<ILocalizationManager>();
+                if (activityManager is not null && localization is not null)
+                {
+                    var message = string.Format(
+                        CultureInfo.InvariantCulture,
+                        localization.GetServerLocalizedString("AuthenticationRateLimitedWithValues"),
+                        count,
+                        remoteIp);
+                    var entry = new ActivityLog(message, "AuthenticationRateLimited", Guid.Empty)
+                    {
+                        LogSeverity = LogLevel.Warning
+                    };
+                    await activityManager.CreateAsync(entry).ConfigureAwait(false);
+                }
+            }
         }
 
         /// <summary>
