@@ -536,6 +536,33 @@ namespace Emby.Server.Implementations.Library
         }
 
         /// <inheritdoc />
+        public IReadOnlyList<PlayHistoryEntry> GetPlayHistory(User user, int limit)
+        {
+            ArgumentNullException.ThrowIfNull(user);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+            using var dbContext = _repository.CreateDbContext();
+
+            // An item holds one row per user-data key; the newest play of any of them dates the item.
+            return dbContext.UserData
+                .AsNoTracking()
+                .Where(e => e.UserId == user.Id && e.LastPlayedDate != null)
+                .GroupBy(e => e.ItemId)
+                .Select(g => new
+                {
+                    ItemId = g.Key,
+                    LastPlayedDate = g.Max(e => e.LastPlayedDate)!.Value,
+                    Played = g.Any(e => e.Played),
+                    PlaybackPositionTicks = g.Max(e => e.PlaybackPositionTicks)
+                })
+                .OrderByDescending(e => e.LastPlayedDate)
+                .Take(limit)
+                .AsEnumerable()
+                .Select(e => new PlayHistoryEntry(e.ItemId, e.LastPlayedDate, e.Played, e.PlaybackPositionTicks))
+                .ToList();
+        }
+
+        /// <inheritdoc />
         public void ResetPlaybackStreamSelections(User user, BaseItem item)
         {
             ArgumentNullException.ThrowIfNull(user);

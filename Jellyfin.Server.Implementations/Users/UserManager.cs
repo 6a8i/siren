@@ -524,6 +524,7 @@ namespace Jellyfin.Server.Implementations.Users
                     MaxActiveSessions = user.MaxActiveSessions,
                     IsAdministrator = user.HasPermission(PermissionKind.IsAdministrator),
                     IsFamilyAdministrator = user.HasPermission(PermissionKind.IsFamilyAdministrator),
+                    IsChildProfile = user.HasPermission(PermissionKind.IsChildProfile),
                     IsHidden = user.HasPermission(PermissionKind.IsHidden),
                     IsDisabled = user.HasPermission(PermissionKind.IsDisabled),
                     EnableSharedDeviceControl = user.HasPermission(PermissionKind.EnableSharedDeviceControl),
@@ -944,6 +945,16 @@ namespace Jellyfin.Server.Implementations.Users
                         throw new ArgumentException("A family member cannot be a server administrator.");
                     }
 
+                    if (policy.IsChildProfile && policy.IsAdministrator)
+                    {
+                        throw new ArgumentException("A server administrator cannot be a child profile.");
+                    }
+
+                    if (policy.IsChildProfile && policy.IsFamilyAdministrator)
+                    {
+                        throw new ArgumentException("A child profile cannot be a family administrator.");
+                    }
+
                     // The default number of login attempts is 3, but for some god forsaken reason it's sent to the server as "0"
                     int? maxLoginAttempts = policy.LoginAttemptsBeforeLockout switch
                     {
@@ -964,6 +975,7 @@ namespace Jellyfin.Server.Implementations.Users
                     user.SyncPlayAccess = policy.SyncPlayAccess;
                     user.SetPermission(PermissionKind.IsAdministrator, policy.IsAdministrator);
                     user.SetPermission(PermissionKind.IsFamilyAdministrator, policy.IsFamilyAdministrator);
+                    user.SetPermission(PermissionKind.IsChildProfile, policy.IsChildProfile);
                     user.SetPermission(PermissionKind.IsHidden, policy.IsHidden);
                     user.SetPermission(PermissionKind.IsDisabled, policy.IsDisabled);
                     user.SetPermission(PermissionKind.EnableSharedDeviceControl, policy.EnableSharedDeviceControl);

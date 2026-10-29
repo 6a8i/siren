@@ -27,6 +27,12 @@ public class CreateFamilyMemberDto
     public bool IsFamilyAdministrator { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the profile is a child profile, shown a simplified UI
+    /// by the client. A child profile cannot be a family administrator.
+    /// </summary>
+    public bool IsChildProfile { get; set; }
+
+    /// <summary>
     /// Gets or sets the maximum parental rating score, or <c>null</c> for no limit.
     /// </summary>
     public int? MaxParentalRating { get; set; }

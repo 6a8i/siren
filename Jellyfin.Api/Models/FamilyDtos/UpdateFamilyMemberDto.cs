@@ -22,6 +22,12 @@ public class UpdateFamilyMemberDto
     public bool IsFamilyAdministrator { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the profile is a child profile, shown a simplified UI
+    /// by the client. A child profile cannot be a family administrator.
+    /// </summary>
+    public bool IsChildProfile { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether the profile is disabled. <c>false</c> also unlocks a
     /// profile that was locked out by wrong PINs.
     /// </summary>

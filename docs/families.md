@@ -15,10 +15,14 @@ desbloquear, remover) sem nenhum acesso ao painel do servidor.
 | `Users.FamilyId` | Família do usuário, ou `NULL` para contas fora de qualquer família (admins do servidor e contas antigas). FK com `ON DELETE SET NULL`. |
 | `Users.LockedOutUntil` | `DateTime?` em UTC: até quando o perfil está bloqueado por PINs errados, ou `NULL`. Só membros de família recebem valor; um valor no passado não tem efeito e é limpo no próximo login. Migração `AddLockedOutUntil`. |
 | `PermissionKind.IsFamilyAdministrator` (24) | Perfil que administra a própria família. |
-| `UserDto.FamilyId`, `UserPolicy.IsFamilyAdministrator` | Expostos na API para o cliente. `LockedOutUntil` **não** entra no `UserDto` genérico (clientes do SDK upstream não quebram); fica só no `FamilyMemberDto`. |
+| `PermissionKind.IsChildProfile` (25) | Perfil infantil: o cliente mostra uma interface simplificada. Nunca é administrador da família nem do servidor. Linha de permissão (chave/valor), sem migração. |
+| `UserDto.FamilyId`, `UserPolicy.IsFamilyAdministrator`, `UserPolicy.IsChildProfile` | Expostos na API para o cliente. `LockedOutUntil` **não** entra no `UserDto` genérico (clientes do SDK upstream não quebram); fica só no `FamilyMemberDto`. |
 | `FamilyDto` | `Id`, `Name`, `DateCreated`, `MemberCount`, `MaxMembers`, `EnableAllFolders`, `EnabledFolders`. |
 | `FamilyMemberDto` | `UserDto` mais `HasPin` (o perfil tem senha), `IsLockedOut` (bloqueado por PINs errados), `LockedOutUntil` (`DateTime?` UTC, fim do bloqueio em curso ou `null`) e `HasAllFamilyFolders` (alcança tudo o que a família alcança). Devolvido por todos os endpoints de membros. |
 | `FamilyLibraryDto` | `Id`, `Name`, `CollectionType` (`CollectionTypeOptions?`, o mesmo de `GET /Library/VirtualFolders`): uma biblioteca que a família alcança, pelo nome. |
+| `FamilyHistoryEntryDto` | `ItemId`, `Name`, `SeriesName?`, `SeasonName?`, `Type` (`BaseItemKind`), `Date` (UTC, última reprodução), `PlayedPercentage?` (só quando parou no meio), `Completed`, `ImageTag?` (imagem primária do item, ou da série para um episódio): um item do histórico de um perfil. |
+| `FamilyDeviceDto` | `Id` (id do dispositivo), `Name`, `AppName`, `AppVersion`, `UserId`, `UserName`, `DateLastActivity` (UTC), `IsCurrent` (o dispositivo de quem chama): um dispositivo conectado como perfil da família. |
+| `IUserDataManager.GetPlayHistory(user, limit)` / `PlayHistoryEntry` | Lê a tabela `UserData` do usuário (uma entrada por item, datada pela reprodução mais recente entre as chaves do item, `LastPlayedDate` decrescente). Não resolve nem filtra os itens; o controller faz isso. |
 | `Family.MaxMembers` | 6, aplicado em `FamilyManager.AssignUserAsync` e em `POST /Families/{id}/Members`. |
 | `Family.LoginAttemptsBeforeLockout` | 5, `LoginAttemptsBeforeLockout` dos perfis criados pela API de famílias. |
 | `Family.LockoutDuration` | 15 minutos: quanto tempo um membro fica bloqueado depois de esgotar as tentativas. |
@@ -30,6 +34,22 @@ Regras aplicadas no servidor:
 - Um administrador do servidor nunca pertence a uma família, e um membro de família nunca vira
   administrador do servidor (`UserManager.UpdatePolicyAsync` e `POST /Users/{id}/Policy` recusam).
 - Quem sai de uma família (ou tem a família excluída) perde `IsFamilyAdministrator`.
+- **Perfil infantil.** `IsChildProfile` é só uma marca para o cliente simplificar a interface; no
+  servidor valem duas regras: um perfil infantil não é administrador da família (400 em
+  `POST /Families/{id}/Members` e `POST /Families/{id}/Members/{userId}` quando os dois vêm `true`, e
+  `ArgumentException` → 400 em `UserManager.UpdatePolicyAsync`) e um administrador do servidor não é
+  perfil infantil (400 em `UpdatePolicyAsync`, logo também em `POST /Users/{id}/Policy`).
+- **Histórico.** `GET /Families/{id}/Members/{userId}/History` mostra o que o perfil reproduziu, do
+  mais recente ao mais antigo, a partir do `UserData` do perfil (não do log de atividade): só itens
+  que ainda existem, que não são pastas e que o perfil ainda alcança (`IsVisibleStandalone`). Pode
+  ver: o próprio perfil, os administradores daquela família e o administrador do servidor.
+- **Dispositivos.** `GET /Families/{id}/Devices` lista os tokens de acesso (`Devices`) de cada
+  perfil da família, um por par (dispositivo, perfil), do mais recente ao mais antigo, com
+  `IsCurrent` no dispositivo de quem chama. `DELETE /Families/{id}/Devices/{deviceId}` revoga todos
+  os tokens que aquele dispositivo tem para perfis da família (`ISessionManager.Logout(device)`, que
+  também encerra as sessões ativas dele), para que precise entrar de novo; 404 quando nenhum perfil
+  da família está conectado nele, 400 quando é o dispositivo de quem chama. Publica
+  `FamilyDeviceRemoved`.
 - **Alcance de bibliotecas.** O administrador do servidor define as bibliotecas que a família alcança
   (`EnableAllFolders`/`EnabledFolders` da família); os perfis herdam esse alcance e nunca o excedem.
   O limite é aplicado ao mudar o alcance da família (`FamilyManager.UpdateLibraryAccessAsync` limita
@@ -100,9 +120,12 @@ Regras aplicadas no servidor:
 | DELETE | `/Families/{id}?deleteMembers=` | admin do servidor | `false` mantém os perfis como contas soltas |
 | GET | `/Families/{id}/Members` | admin ou membro | `FamilyMemberDto[]`; `HasPin` indica se o perfil pede PIN |
 | GET | `/Families/{id}/Members/{userId}` | admin ou membro | `FamilyMemberDto` |
-| POST | `/Families/{id}/Members` | admin ou admin da família | `{ Name, Password?, IsFamilyAdministrator?, MaxParentalRating?, EnableAllFolders?, EnabledFolders? }` → `FamilyMemberDto` |
+| POST | `/Families/{id}/Members` | admin ou admin da família | `{ Name, Password?, IsFamilyAdministrator?, IsChildProfile?, MaxParentalRating?, EnableAllFolders?, EnabledFolders? }` → `FamilyMemberDto`; 400 se `IsChildProfile` e `IsFamilyAdministrator` |
 | PUT | `/Families/{id}/Members/{userId}` | admin do servidor | move uma conta existente para a família, limitada ao alcance dela |
-| POST | `/Families/{id}/Members/{userId}` | admin ou admin da família | `{ Name, IsFamilyAdministrator, IsDisabled, MaxParentalRating, EnableAllFolders, EnabledFolders }` → 200 `FamilyMemberDto`; `IsDisabled = false` também desbloqueia (limpa `LockedOutUntil` e as tentativas) |
+| POST | `/Families/{id}/Members/{userId}` | admin ou admin da família | `{ Name, IsFamilyAdministrator, IsChildProfile, IsDisabled, MaxParentalRating, EnableAllFolders, EnabledFolders }` → 200 `FamilyMemberDto`; `IsDisabled = false` também desbloqueia (limpa `LockedOutUntil` e as tentativas); 400 se `IsChildProfile` e `IsFamilyAdministrator` |
+| GET | `/Families/{id}/Members/{userId}/History?limit=` | o próprio perfil, admin da família ou admin do servidor (403 para os demais membros) | `FamilyHistoryEntryDto[]`, do mais recente ao mais antigo; `limit` padrão 50, máximo 200 |
+| GET | `/Families/{id}/Devices` | admin ou membro | `FamilyDeviceDto[]`, do mais recente ao mais antigo; `IsCurrent` marca o dispositivo de quem chama |
+| DELETE | `/Families/{id}/Devices/{deviceId}` | admin ou admin da família | → 204; revoga os tokens do dispositivo para os perfis da família; 404 se nenhum perfil da família está conectado nele; 400 se é o dispositivo de quem chama |
 | POST | `/Families/{id}/Members/{userId}/Unlock` | admin ou admin da família | sem corpo → 204; encerra o bloqueio por PIN (zera `LockedOutUntil` e `InvalidLoginAttemptCount`) sem mexer no resto da política; 204 também se não estava bloqueado |
 | POST | `/Families/{id}/Members/{userId}/Password` | admin ou admin da família | `{ NewPassword?, ResetPassword? }` |
 | POST | `/Families/{id}/Members/{userId}/Image` | admin, admin da família ou o próprio perfil | corpo em base64 com o `Content-Type` da imagem (como `POST /UserImage`) → 204; 400 se o `Content-Type` não é de imagem |
@@ -120,7 +143,8 @@ fallback para `en-US`): `FamilyCreated`, `FamilyRenamed` e `FamilyDeleted` são 
 `FamilyManager`; `FamilyProfileCreated`, `FamilyProfileLinked` (conta existente vinculada),
 `FamilyProfileUnlinked` (removido mantendo a conta), `FamilyProfileDeleted` e `FamilyProfileSwitch`
 ("X trocou para o perfil Y", `UserId` = perfil de destino, publicado pelo `Switch` após a autenticação)
-pelo `FamilyController`. As entradas genéricas de usuário (`UserCreated`, `UserDeleted`,
+e `FamilyDeviceRemoved` ("O dispositivo X foi desconectado da família Y por Z", `UserId` = quem
+removeu, ou vazio para chave de API) pelo `FamilyController`. As entradas genéricas de usuário (`UserCreated`, `UserDeleted`,
 `UserLockedOut`, `AuthenticationFailed`) continuam sendo geradas como antes.
 
 ## Cliente web (siren-web)
@@ -216,6 +240,18 @@ Ajudantes novos: `RequestHelpers.GetUserScope(principal, userManager)` (o mesmo 
   `IsDisabled = false` também desbloqueia), as bibliotecas pelo nome (alcance total vs. restrito, `Mine`,
   403 para membro de outra família, 404 sem família) e a imagem de membro (upload de um PNG mínimo,
   substituição pelo próprio perfil, exclusão, 400 sem imagem, 403 para membro de outra família).
+- `tests/Jellyfin.Server.Integration.Tests/Controllers/FamilyRound4Tests.cs`: o perfil infantil
+  (ida e volta pelos endpoints de família e por `GET /Users/{id}`, 400 ao criar ou editar como
+  administrador da família, 400 ao marcar o administrador do servidor por `POST /Users/{id}/Policy`),
+  o histórico (dois filmes criados por `ILibraryManager.CreateItem` numa biblioteca real e marcados por
+  `POST /UserPlayedItems/{id}?datePlayed=`, ordem, `limit`, 403 para outra família e para um membro
+  comum olhando outro perfil) e os dispositivos (um segundo token do perfil com outro `DeviceId`
+  aparece na lista com `IsCurrent = false`; `DELETE` → 204 e o token passa a receber 401; 400 para o
+  próprio dispositivo, 404 para desconhecido, 403 para membro comum e para outra família; a entrada
+  `FamilyDeviceRemoved` no log de atividade).
+- `tests/Jellyfin.Server.Implementations.Tests/ScheduledTasks/ExpireInactiveSessionsTaskTests.cs` e
+  `tests/Jellyfin.Server.Tests/RateLimiting/AuthenticationRateLimitMonitorTests.cs`: a tarefa de
+  expiração e o contador de bloqueios (ver `docs/operations.md`).
 - `tests/Jellyfin.Server.Implementations.Tests/Users/UserManagerLockoutTests.cs`: a transição do
   bloqueio em `UserManager.AuthenticateUser` com o `CryptographyProvider` real: membro de família →
   `LockedOutUntil` preenchido, não desativado, recusado antes do PIN enquanto dura, entra normalmente

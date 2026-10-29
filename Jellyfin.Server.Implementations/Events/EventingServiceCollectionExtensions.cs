@@ -41,6 +41,7 @@ namespace Jellyfin.Server.Implementations.Events
             collection.AddScoped<IEventConsumer<FamilyProfileUnlinkedEventArgs>, FamilyProfileUnlinkedLogger>();
             collection.AddScoped<IEventConsumer<FamilyProfileDeletedEventArgs>, FamilyProfileDeletedLogger>();
             collection.AddScoped<IEventConsumer<FamilyProfileSwitchedEventArgs>, FamilyProfileSwitchedLogger>();
+            collection.AddScoped<IEventConsumer<FamilyDeviceRemovedEventArgs>, FamilyDeviceRemovedLogger>();
 
             // Library consumers
             collection.AddScoped<IEventConsumer<LyricDownloadFailureEventArgs>, LyricDownloadFailureLogger>();

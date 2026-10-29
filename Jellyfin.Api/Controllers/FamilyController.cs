@@ -11,18 +11,24 @@ using Jellyfin.Api.Helpers;
 using Jellyfin.Api.Models.FamilyDtos;
 using Jellyfin.Data;
 using Jellyfin.Data.Events.Families;
+using Jellyfin.Data.Queries;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Common.Extensions;
 using MediaBrowser.Controller.Authentication;
+using MediaBrowser.Controller.Devices;
+using MediaBrowser.Controller.Drawing;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Events;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Controller.Playlists;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Dto;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Users;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -47,6 +53,9 @@ public class FamilyController : BaseJellyfinApiController
     private readonly IEventManager _eventManager;
     private readonly ILibraryManager _libraryManager;
     private readonly ImageUploadHelper _imageUploadHelper;
+    private readonly IDeviceManager _deviceManager;
+    private readonly IUserDataManager _userDataManager;
+    private readonly IImageProcessor _imageProcessor;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FamilyController"/> class.
@@ -59,6 +68,9 @@ public class FamilyController : BaseJellyfinApiController
     /// <param name="eventManager">Instance of the <see cref="IEventManager"/> interface.</param>
     /// <param name="libraryManager">Instance of the <see cref="ILibraryManager"/> interface.</param>
     /// <param name="imageUploadHelper">Instance of the <see cref="ImageUploadHelper"/> class.</param>
+    /// <param name="deviceManager">Instance of the <see cref="IDeviceManager"/> interface.</param>
+    /// <param name="userDataManager">Instance of the <see cref="IUserDataManager"/> interface.</param>
+    /// <param name="imageProcessor">Instance of the <see cref="IImageProcessor"/> interface.</param>
     public FamilyController(
         IFamilyManager familyManager,
         IUserManager userManager,
@@ -67,7 +79,10 @@ public class FamilyController : BaseJellyfinApiController
         IAuthorizationContext authContext,
         IEventManager eventManager,
         ILibraryManager libraryManager,
-        ImageUploadHelper imageUploadHelper)
+        ImageUploadHelper imageUploadHelper,
+        IDeviceManager deviceManager,
+        IUserDataManager userDataManager,
+        IImageProcessor imageProcessor)
     {
         _familyManager = familyManager;
         _userManager = userManager;
@@ -77,6 +92,9 @@ public class FamilyController : BaseJellyfinApiController
         _eventManager = eventManager;
         _libraryManager = libraryManager;
         _imageUploadHelper = imageUploadHelper;
+        _deviceManager = deviceManager;
+        _userDataManager = userDataManager;
+        _imageProcessor = imageProcessor;
     }
 
     private bool IsServerAdministrator => User.IsInRole(UserRoles.Administrator);
@@ -413,6 +431,11 @@ public class FamilyController : BaseJellyfinApiController
                 _familyManager.MaxMembers));
         }
 
+        if (request.IsChildProfile && request.IsFamilyAdministrator)
+        {
+            return BadRequest("A child profile cannot be a family administrator.");
+        }
+
         User newUser;
         try
         {
@@ -436,6 +459,7 @@ public class FamilyController : BaseJellyfinApiController
         var policy = _userManager.GetUserDto(_userManager.GetUserById(newUser.Id)!).Policy;
         policy.IsHidden = false;
         policy.IsFamilyAdministrator = request.IsFamilyAdministrator;
+        policy.IsChildProfile = request.IsChildProfile;
         policy.MaxParentalRating = request.MaxParentalRating;
         policy.LoginAttemptsBeforeLockout = Family.LoginAttemptsBeforeLockout;
         policy.EnableContentDeletion = false;
@@ -540,6 +564,11 @@ public class FamilyController : BaseJellyfinApiController
             return NotFound("Profile not found in this family.");
         }
 
+        if (request.IsChildProfile && request.IsFamilyAdministrator)
+        {
+            return BadRequest("A child profile cannot be a family administrator.");
+        }
+
         var caller = GetCaller();
         if (!IsServerAdministrator)
         {
@@ -570,6 +599,7 @@ public class FamilyController : BaseJellyfinApiController
 
         var policy = _userManager.GetUserDto(_userManager.GetUserById(member.Id)!).Policy;
         policy.IsFamilyAdministrator = request.IsFamilyAdministrator;
+        policy.IsChildProfile = request.IsChildProfile;
         policy.IsDisabled = request.IsDisabled;
         policy.MaxParentalRating = request.MaxParentalRating;
         if (!request.IsDisabled)
@@ -908,6 +938,210 @@ public class FamilyController : BaseJellyfinApiController
 
         await _eventManager.PublishAsync(new FamilyProfileSwitchedEventArgs(family, caller, target)).ConfigureAwait(false);
         return result;
+    }
+
+    /// <summary>
+    /// Gets what a family profile played most recently, newest first: the items the profile's user
+    /// data knows about and that the profile still reaches.
+    /// </summary>
+    /// <param name="familyId">The family id.</param>
+    /// <param name="userId">The profile's user id.</param>
+    /// <param name="limit">The maximum number of entries, up to 200.</param>
+    /// <response code="200">History returned.</response>
+    /// <response code="403">The current user is neither the profile nor a family administrator.</response>
+    /// <response code="404">Family or profile not found.</response>
+    /// <returns>The history, newest first.</returns>
+    [HttpGet("{familyId}/Members/{userId}/History")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<IReadOnlyList<FamilyHistoryEntryDto>> GetMemberHistory(
+        [FromRoute, Required] Guid familyId,
+        [FromRoute, Required] Guid userId,
+        [FromQuery] int limit = 50)
+    {
+        var family = _familyManager.GetFamily(familyId);
+        if (family is null)
+        {
+            return NotFound("Family not found.");
+        }
+
+        if (!CanView(family))
+        {
+            return Forbidden("Only members of the family can see its profiles.");
+        }
+
+        var member = GetMember(family, userId);
+        if (member is null)
+        {
+            return NotFound("Profile not found in this family.");
+        }
+
+        if (!CanManageProfile(family, member))
+        {
+            return Forbidden("Only a family administrator or the profile itself can see its history.");
+        }
+
+        limit = Math.Clamp(limit, 1, 200);
+        var history = new List<FamilyHistoryEntryDto>(limit);
+
+        // Items that were deleted, or that the profile no longer reaches, fall out; ask for a few
+        // more rows than needed so that a handful of them does not shorten the list.
+        foreach (var entry in _userDataManager.GetPlayHistory(member, limit * 2))
+        {
+            if (history.Count >= limit)
+            {
+                break;
+            }
+
+            var item = _libraryManager.GetItemById<BaseItem>(entry.ItemId);
+            if (item is null || item.IsFolder || !item.IsVisibleStandalone(member))
+            {
+                continue;
+            }
+
+            history.Add(ToHistoryEntry(item, entry));
+        }
+
+        return history;
+    }
+
+    /// <summary>
+    /// Gets the devices signed in as a profile of a family, most recently used first.
+    /// </summary>
+    /// <param name="familyId">The family id.</param>
+    /// <response code="200">Devices returned.</response>
+    /// <response code="403">The current user is not a member of the family.</response>
+    /// <response code="404">Family not found.</response>
+    /// <returns>The devices. <c>IsCurrent</c> marks the one the caller is using.</returns>
+    [HttpGet("{familyId}/Devices")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<IReadOnlyList<FamilyDeviceDto>> GetFamilyDevices([FromRoute, Required] Guid familyId)
+    {
+        var family = _familyManager.GetFamily(familyId);
+        if (family is null)
+        {
+            return NotFound("Family not found.");
+        }
+
+        if (!CanView(family))
+        {
+            return Forbidden("Only members of the family can see its devices.");
+        }
+
+        var currentDeviceId = User.GetDeviceId();
+        var devices = new List<FamilyDeviceDto>();
+        foreach (var member in _familyManager.GetMembers(family.Id))
+        {
+            // One row per token; a device that signed in as the same profile more than once is one device.
+            var memberDevices = _deviceManager.GetDevices(new DeviceQuery { UserId = member.Id }).Items
+                .GroupBy(device => device.DeviceId, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.MaxBy(device => device.DateLastActivity)!);
+            foreach (var device in memberDevices)
+            {
+                devices.Add(new FamilyDeviceDto
+                {
+                    Id = device.DeviceId,
+                    Name = device.DeviceName,
+                    AppName = device.AppName,
+                    AppVersion = device.AppVersion,
+                    UserId = member.Id,
+                    UserName = member.Username,
+                    DateLastActivity = device.DateLastActivity,
+                    IsCurrent = string.Equals(device.DeviceId, currentDeviceId, StringComparison.OrdinalIgnoreCase)
+                });
+            }
+        }
+
+        return devices.OrderByDescending(device => device.DateLastActivity).ToList();
+    }
+
+    /// <summary>
+    /// Signs a device out of a family: every token the device holds for a profile of the family is
+    /// revoked, so the device has to sign in again.
+    /// </summary>
+    /// <param name="familyId">The family id.</param>
+    /// <param name="deviceId">The device id.</param>
+    /// <response code="204">Device signed out.</response>
+    /// <response code="400">The device is the one the current user is using.</response>
+    /// <response code="403">The current user does not manage the family.</response>
+    /// <response code="404">Family not found, or no profile of the family is signed in on the device.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpDelete("{familyId}/Devices/{deviceId}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> RemoveFamilyDevice(
+        [FromRoute, Required] Guid familyId,
+        [FromRoute, Required] string deviceId)
+    {
+        var family = _familyManager.GetFamily(familyId);
+        if (family is null)
+        {
+            return NotFound("Family not found.");
+        }
+
+        if (!CanManage(family))
+        {
+            return Forbidden("Only a family administrator can sign out the family's devices.");
+        }
+
+        var tokens = _familyManager.GetMembers(family.Id)
+            .SelectMany(member => _deviceManager.GetDevices(new DeviceQuery { UserId = member.Id, DeviceId = deviceId }).Items)
+            .ToList();
+        if (tokens.Count == 0)
+        {
+            return NotFound("No profile of this family is signed in on that device.");
+        }
+
+        if (string.Equals(deviceId, User.GetDeviceId(), StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest("You cannot sign out the device you are using.");
+        }
+
+        foreach (var token in tokens)
+        {
+            await _sessionManager.Logout(token).ConfigureAwait(false);
+        }
+
+        var deviceName = tokens.MaxBy(token => token.DateLastActivity)!.DeviceName;
+        await _eventManager.PublishAsync(new FamilyDeviceRemovedEventArgs(family, deviceId, deviceName, GetCaller())).ConfigureAwait(false);
+        return NoContent();
+    }
+
+    private FamilyHistoryEntryDto ToHistoryEntry(BaseItem item, PlayHistoryEntry entry)
+    {
+        var dto = new FamilyHistoryEntryDto
+        {
+            ItemId = item.Id,
+            Name = item.Name,
+            Type = item.GetBaseItemKind(),
+            Date = entry.LastPlayedDate,
+            Completed = entry.Played
+        };
+
+        if (!entry.Played && entry.PlaybackPositionTicks > 0 && item.RunTimeTicks is > 0)
+        {
+            dto.PlayedPercentage = 100.0 * entry.PlaybackPositionTicks / item.RunTimeTicks.Value;
+        }
+
+        BaseItem imageSource = item;
+        if (item is Episode episode)
+        {
+            dto.SeriesName = episode.SeriesName;
+            dto.SeasonName = episode.SeasonName;
+            if (episode.Series is { } series)
+            {
+                imageSource = series;
+            }
+        }
+
+        var image = imageSource.GetImageInfo(ImageType.Primary, 0);
+        dto.ImageTag = image is null ? null : _imageProcessor.GetImageCacheTag(imageSource, image);
+        return dto;
     }
 
     /// <summary>

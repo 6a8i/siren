@@ -100,6 +100,15 @@ namespace MediaBrowser.Controller.Library
         bool UpdatePlayState(BaseItem item, UserItemData data, long? reportedPositionTicks);
 
         /// <summary>
+        /// Gets the items a user played most recently, newest first, from the stored user data: one
+        /// entry per item, dated by its newest play. The items are not resolved or access-checked.
+        /// </summary>
+        /// <param name="user">The user.</param>
+        /// <param name="limit">The maximum number of entries.</param>
+        /// <returns>The entries, newest first.</returns>
+        IReadOnlyList<PlayHistoryEntry> GetPlayHistory(User user, int limit);
+
+        /// <summary>
         /// Clears any stored audio and subtitle stream selections for the given user/item pair.
         /// Used when the user has opted out of remembering selections.
         /// </summary>

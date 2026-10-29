@@ -129,4 +129,10 @@ public enum PermissionKind
     /// Whether the user manages the profiles of their own family.
     /// </summary>
     IsFamilyAdministrator = 24,
+
+    /// <summary>
+    /// Whether the user is a child profile of its family: the client shows it a simplified UI; it
+    /// is never a family administrator nor a server administrator.
+    /// </summary>
+    IsChildProfile = 25,
 }
