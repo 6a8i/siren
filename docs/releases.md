@@ -4,6 +4,12 @@ Como uma versão do Siren vira pacotes instaláveis, e como instalar, atualizar 
 Tudo é feito pelo workflow `.github/workflows/release.yml` com os scripts de `packaging/`; nada
 depende de infraestrutura fora do GitHub.
 
+## Acesso ao repositório do web
+
+O `siren-web` é privado. O workflow lê o segredo `SIREN_WEB_TOKEN` (um fine-grained PAT com
+permissão *Contents: read* em `6a8i/siren-web`, cadastrado em Settings → Secrets and variables →
+Actions do `6a8i/siren`); sem ele, o checkout só funciona se o `siren-web` for público.
+
 ## Cortar uma release
 
 ```

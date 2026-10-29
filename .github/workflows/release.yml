@@ -49,10 +49,11 @@ jobs:
         id: meta
         env:
           WEB_REF_INPUT: ${{ inputs.web_ref }}
+          WEB_TOKEN: ${{ secrets.SIREN_WEB_TOKEN }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$GITHUB_REF_NAME" ]; then
             version="${GITHUB_REF_NAME#v}"
-            if [ -n "$(git ls-remote --tags https://github.com/6a8i/siren-web "refs/tags/$GITHUB_REF_NAME")" ]; then
+            if [ -n "$(git ls-remote --tags "https://${WEB_TOKEN:+x-access-token:$WEB_TOKEN@}github.com/6a8i/siren-web" "refs/tags/$GITHUB_REF_NAME")" ]; then
               web_ref="$GITHUB_REF_NAME"
             else
               web_ref="${WEB_REF_INPUT:-main}"
@@ -70,6 +71,7 @@ jobs:
         with:
           repository: 6a8i/siren-web
           ref: ${{ steps.meta.outputs.web_ref }}
+          token: ${{ secrets.SIREN_WEB_TOKEN || github.token }}
           path: web
           show-progress: false
 
