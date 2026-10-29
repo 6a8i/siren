@@ -105,6 +105,19 @@ com N em `AuthenticationRateLimitPerMinute` (`config/system.xml`, `ServerConfigu
 Rate limit reached for /Users/AuthenticateByName by 203.0.113.7, rejecting with 429 for 42s
 ```
 
+Um endereço que continua batendo no limite (um chute de senha que espera cada janela passar) gera,
+além disso, **um** aviso por hora a partir da 50ª rejeição em uma hora corrida, e uma entrada no
+log de atividade (tipo `AuthenticationRateLimited`, severidade *Warning*, sem usuário, com o mesmo
+texto localizado):
+
+```
+Authentication rate limit hit 50 times in the last hour by 203.0.113.7
+```
+
+O contador (`Jellyfin.Server/RateLimiting/AuthenticationRateLimitMonitor.cs`, janela deslizante de
+1 h, limiar 50, no máximo 1024 endereços em memória; os ociosos são descartados quando a tabela
+enche) também zera ao reiniciar e só conta rejeições, não tentativas.
+
 O contador vive em memória e zera ao reiniciar; o limite conta tentativas, não falhas, então dez
 logins certos seguidos também disparam (nenhum cliente faz isso). A janela de 60 s é fixa
 (`Jellyfin.Api/Constants/AuthenticationRateLimit.cs`); só a quantidade é configurável.
@@ -146,6 +159,21 @@ entregar a elas o poder de apagar ou alterar algo.
 - Chaves sem a marca não mudam em nada. A coluna `IsReadOnly` da tabela `ApiKeys` chega pela
   migração `AddApiKeyReadOnly`, com `false` para as chaves existentes.
 - Sessões de usuário (tokens emitidos no login) não têm a marca; isso é só para chaves de API.
+
+## Sessões inativas
+
+A tarefa **Expirar sessões inativas** (chave `ExpireInactiveSessions`, categoria Manutenção,
+`Emby.Server.Implementations/ScheduledTasks/Tasks/ExpireInactiveSessionsTask.cs`) roda por padrão a
+cada **24 h** e revoga os tokens de acesso (linhas de `Devices`) cuja última atividade
+(`DateLastActivity`, atualizada no máximo a cada 3 minutos pelo `AuthorizationContext`) é mais
+antiga que `InactiveSessionDays` (`config/system.xml`, `ServerConfiguration`), padrão **90** dias;
+`0` desliga a tarefa (ela registra que está desligada e termina). Um dispositivo revogado precisa
+entrar de novo. Chaves de API vivem na tabela `ApiKeys` e nunca são tocadas. Ao fim, a tarefa
+registra quantos tokens revogou:
+
+```
+Revoked 3 access tokens unused for more than 90 days
+```
 
 ## Backup agendado
 
